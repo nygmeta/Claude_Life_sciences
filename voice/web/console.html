@@ -473,9 +473,14 @@ window.FIXTURES = {"elisa":[{"transcript":"Run an ELISA on today's plasma sample
 // and the edge routes /session/* and /adapters to the backend (see doc/DEPLOY_PUBLIC.md).
 // The backend keeps binding to loopback: it has no authentication of its own and must
 // never be exposed directly.
-const API = (['8766', '8091', '8090', ''].includes(location.port) || location.protocol === 'file:')
-  ? 'http://localhost:8000'    // local dev: backend reachable directly
-  : '';                        // served remotely: same origin, path-routed at the edge
+// ?api=http://localhost:8000 overrides it outright. That is the case that matters for the
+// split deployment: the robot is on the scientist's LAN, so the Lab Agent runs on HER
+// machine next to it, and the console has to be told where that is regardless of which port
+// happens to be serving this page.
+const API = new URLSearchParams(location.search).get('api')
+  ?? ((['8766', '8091', '8090', '8095', ''].includes(location.port) || location.protocol === 'file:')
+    ? 'http://localhost:8000'    // local dev: backend reachable directly
+    : '');                       // served remotely: same origin, path-routed at the edge
 const FIXTURES = window.FIXTURES;   // inlined above
 const $ = id => document.getElementById(id);
 
@@ -867,12 +872,38 @@ setScenario('elisa');
     caption.className = 'voice-caption' + (refused ? ' refused' : '');
   }
 
+  // Where the speech service lives. See the comment on wsUrl below for why this is a
+  // parameter. wss:// on an https page is not optional: a browser blocks a plain ws://
+  // from an https page as mixed content, and the failure is silent (no voices, no mic, no
+  // error anyone can act on), which is exactly the shape of bug that only shows up once
+  // the page is served to someone else.
+  function voiceWsUrl(){
+    const v = new URLSearchParams(location.search).get('voice');
+    if (!v) {
+      const scheme = (location.protocol === 'https:') ? 'wss://' : 'ws://';
+      return scheme + location.host + '/?mode=speech';
+    }
+    if (/^wss?:\/\//i.test(v)) return v + (v.includes('?') ? '&' : '?') + 'mode=speech';
+    // a bare host: assume wss, because a remote speech service reached over the internet
+    // without TLS would be shipping a live microphone in the clear.
+    return 'wss://' + v.replace(/\/+$/, '') + '/?mode=speech';
+  }
+
   const vw = new VoiceWidget({
-    // wss:// on an https page, or the browser blocks the socket as mixed content and the
-    // voice half is simply never there: no voices, no mic, no error a user can act on.
-    // The page is https the moment it is served over the tunnel, which is exactly when
-    // nobody is standing next to the machine to notice.
-    wsUrl: (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/?mode=speech',
+    // The speech service does NOT have to live where this page lives.
+    //
+    // The robot is on the scientist's LAN, so the Lab Agent has to run next to it, which
+    // means the console is served from HER machine. The GPU that does ASR and TTS is on the
+    // other side of the world. Those are different constraints and they pull in different
+    // directions, so the voice endpoint is a parameter, not an assumption:
+    //
+    //   ?voice=lab-auto.syncspeech.app     -> wss://lab-auto.syncspeech.app/?mode=speech
+    //   ?voice=wss://host/path             -> used verbatim
+    //   (omitted)                          -> same origin as this page (the local case)
+    //
+    // Audio goes to the speech box; the protocol never does. The robot is only ever spoken
+    // to by the machine standing next to it.
+    wsUrl: voiceWsUrl(),
     onTranscript: (text, confidence, meta) => {
       setCaption('');
       // Accepted speech = typed input: same path as pressing Send.

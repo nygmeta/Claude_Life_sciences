@@ -1,34 +1,34 @@
 {
  "voice": "nurisa",
  "params": {
-  "temperature": 0.3,
+  "temperature": 0.2,
   "cfg_scale": 1.0,
   "top_k": 0
  },
  "clips": {
   "elisa:0": {
    "file": "demo-audio/elisa-0.mp3",
-   "kb": 82.7
+   "kb": 81.3
   },
   "elisa:1": {
    "file": "demo-audio/elisa-1.mp3",
-   "kb": 149.8
+   "kb": 152.7
   },
   "elisa:2": {
    "file": "demo-audio/elisa-2.mp3",
-   "kb": 242.1
+   "kb": 236.6
   },
   "elisa:3": {
    "file": "demo-audio/elisa-3.mp3",
-   "kb": 150.9
+   "kb": 127.8
   },
   "dilution:0": {
    "file": "demo-audio/dilution-0.mp3",
-   "kb": 196.0
+   "kb": 205.3
   },
   "dilution:1": {
    "file": "demo-audio/dilution-1.mp3",
-   "kb": 131.3
+   "kb": 110.7
   }
  }
 }

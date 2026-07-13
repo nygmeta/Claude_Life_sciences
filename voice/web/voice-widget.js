@@ -249,6 +249,13 @@ export class VoiceWidget {
   //
   // These are getters, not fields, so `vw.confirmFloor = 0` THROWS rather than silently sticking
   // a lie onto the widget for a panel to read back.
+  // Is the speech service actually reachable RIGHT NOW? A host needs this to decide
+  // whether it can synthesize on demand or must fall back to something it already has.
+  // readyState 1 is OPEN: not "connecting", not "closing". A socket that is merely
+  // trying to reconnect cannot speak, and saying it can would mean silence at the moment
+  // the words were due.
+  get connected() { return !!this.ws && this.ws.readyState === 1; }
+
   get confirmFloor() { return this._confirmFloor; }   // number, or null until the first lab_state
   // The server's TTS defaults ({voice, temperature, cfg_scale, top_k, max_frames}), or null
   // until the first tts_params message. A host should seed its voice picker from this rather

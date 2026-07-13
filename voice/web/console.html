@@ -1225,17 +1225,29 @@ setScenario('elisa');
 
     _applyTurn(t, adapterKey);
     vw.setLabState(t.state);
+    if (!(speakReplies && t && t.reply)) return;
 
-    if (speakReplies && t && t.reply){
-      const clip = demoKey && DEMO_CLIPS[demoKey];
-      if (clip){
-        playDemoClip(clip);           // pre-rendered: no backend, no network, no GPU
-      } else {
-        // Live, or a demo turn with no clip yet (a fixture added since the last
-        // pre-render). Speak it over the wire rather than going mute.
-        try { vw.speak(t.reply); } catch (e) { /* no voice service: stay silent, keep going */ }
-      }
+    // LIVE TTS FIRST, pre-rendered clip as the fallback.
+    //
+    // The clip is an insurance policy, not the product. When the speech service is up,
+    // synthesize: that way the demo speaks in whatever voice the operator picked in the
+    // drawer, at whatever temperature, and what the room hears is the real system rather
+    // than a recording of it. Auditioning a voice would be pointless if the demo ignored
+    // the choice and played a fixed file.
+    //
+    // When the service is NOT reachable (no GPU, no tunnel, a conference network that ate
+    // the socket), fall back to the pre-rendered clip. That is what keeps the console's
+    // original promise intact: Demo mode still runs with no backend and no network, it
+    // just speaks in the voice it was rendered in.
+    const clip = demoKey && DEMO_CLIPS[demoKey];
+    if (vw.connected){
+      try {
+        stopDemoClip();               // never let a clip and a live utterance overlap
+        vw.speak(t.reply);
+        return;
+      } catch (e) { /* fall through to the clip: better a recording than silence */ }
     }
+    if (clip) playDemoClip(clip);
   };
 
   const _setMode = setMode;

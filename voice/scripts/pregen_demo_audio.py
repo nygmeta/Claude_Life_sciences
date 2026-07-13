@@ -100,9 +100,15 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tts", default="http://127.0.0.1:8040")
     ap.add_argument("--voice", default="nurisa")
-    # Keep in step with the server's DEF_TEMP / DEF_VOICE. If these drift, Demo and Live
-    # stop sounding like the same assistant, which is worse than either value alone.
-    ap.add_argument("--temperature", type=float, default=0.3)
+    # 0.2, deliberately BELOW the live default of 0.3, and this divergence is the point.
+    #
+    # These clips are the fallback that plays when the speech service is unreachable, which
+    # is to say: on stage, when nothing else can be fixed. A fallback has one job, which is
+    # to not embarrass anyone. gepard is autoregressive, so temperature is the dial between
+    # "varied" and "might stammer or drift mid-sentence", and a fixed artifact gains nothing
+    # from variety. Live speech is generated fresh every time and can be re-heard; a bad
+    # clip is baked in forever. So the clips are rendered on the conservative side.
+    ap.add_argument("--temperature", type=float, default=0.2)
     ap.add_argument("--cfg_scale", type=float, default=1.0)
     ap.add_argument("--top_k", type=int, default=0)
     ap.add_argument("--force", action="store_true",

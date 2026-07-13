@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template for the orchestrator LaunchAgent (web/server.py on loopback :@WS_PORT@).
+     Placeholder tokens are filled by deploy/install-mac-agents.sh; do not install directly.
+     The Anthropic key is NOT here: server.py reads it from the gitignored
+     credentials/anthropic_key.txt itself. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>ai.lab-assistant.web</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@REPO@/venv-web/bin/python</string>
+    <string>@REPO@/web/server.py</string>
+  </array>
+  <key>WorkingDirectory</key><string>@REPO@</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>LA_FUNASR_URL</key><string>http://127.0.0.1:@ASR_PORT@/v1</string>
+    <key>LA_TTS_MODELS</key><string>gepard-1.0=http://127.0.0.1:@TTS_PORT@</string>
+    <key>LA_WS_HOST</key><string>127.0.0.1</string>
+    <key>LA_WS_PORT</key><string>@WS_PORT@</string>
+    <key>LA_OPERATOR_EMAILS</key><string>@OPERATOR_EMAILS@</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>5</integer>
+  <key>StandardOutPath</key><string>@REPO@/logs/agent-web.log</string>
+  <key>StandardErrorPath</key><string>@REPO@/logs/agent-web.log</string>
+</dict>
+</plist>

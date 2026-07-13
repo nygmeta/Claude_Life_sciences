@@ -130,6 +130,28 @@ no backend, no API key, no network, so a bad conference connection can't break i
 See `web/README.md`. It's self-contained, so it can be iframed into an existing voice
 front end; or skip the UI entirely and POST straight to `/session/message`.
 
+## Voice interface
+
+`voice/` is the speech half: a self-hosted, real-time voice pipeline that turns a spoken
+request into the transcript this API consumes, and speaks the `reply` back.
+
+```
+mic → browser VAD → Fun-ASR-Nano (STT) → Claude → gepard-1.0 (TTS) → speaker
+                                            │
+                                            └─ POST /session/message   (this repo)
+```
+
+One orchestrator process serves the page and a WebSocket; ASR and TTS run as GPU services
+alongside it. A lab is not a chat room, so beyond a basic voice loop it adds the things a
+noisy, hands-busy room needs: a **confidence gate** (a misheard command is refused, not
+guessed at), **addressed-speech detection** (the mic hears the whole room, not every
+utterance is meant for the assistant), **barge-in**, and a **spoken confirmation gate**
+before anything is allowed to act.
+
+Start at `voice/README.md`. The seam where the two halves meet is `voice/doc/INTEGRATION.md`.
+
+Voice subsystem by Junchen Lu (@RanaCM).
+
 ## Project layout
 
 ```
@@ -145,4 +167,5 @@ app/
 demo/            end-to-end scripted conversation (both scenarios)
 web/             zero-build console (demo + live modes)
 tests/           pipeline guarantees
+voice/           real-time voice interface (VAD → STT → Claude → TTS)
 ```

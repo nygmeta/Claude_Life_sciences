@@ -1,0 +1,17 @@
+# Template for the gepard TTS service systemd --user unit. @TOKENS@ are filled
+# in by deploy/install-services.sh; do not install this file directly.
+[Unit]
+Description=lab-assistant TTS service (gepard-1.0, :@LA_TTS_PORT@)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=@LA_APP_DIR@
+Environment=HF_HOME=@LA_HF_HOME@
+Environment=LA_TTS_BACKEND=gepard
+ExecStart=@TTS_PY@ @LA_APP_DIR@/tts/server.py --host @LA_BIND_HOST@ --port @LA_TTS_PORT@
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

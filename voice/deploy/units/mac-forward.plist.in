@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template for the SSH port-forward LaunchAgent (dev machine to GPU host).
+     Placeholder tokens are filled by deploy/install-mac-agents.sh; do not install directly.
+     KeepAlive restarts the forward when the connection drops or the box reboots. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>ai.lab-assistant.forward</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/ssh</string>
+    <string>-N</string>
+    <string>-o</string><string>BatchMode=yes</string>
+    <string>-o</string><string>ExitOnForwardFailure=yes</string>
+    <string>-o</string><string>ServerAliveInterval=30</string>
+    <string>-o</string><string>ServerAliveCountMax=3</string>
+    <string>-o</string><string>ForwardX11=no</string>
+    <string>-L</string><string>@ASR_PORT@:127.0.0.1:@ASR_PORT@</string>
+    <string>-L</string><string>@TTS_PORT@:127.0.0.1:@TTS_PORT@</string>
+    <string>@SSH_TARGET@</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>15</integer>
+  <key>StandardOutPath</key><string>@REPO@/logs/agent-forward.log</string>
+  <key>StandardErrorPath</key><string>@REPO@/logs/agent-forward.log</string>
+</dict>
+</plist>

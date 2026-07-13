@@ -41,6 +41,38 @@ MIME = {
 
 
 class Handler(SimpleHTTPRequestHandler):
+    def _redirect_root(self) -> bool:
+        """A bare "/" must NOT fall through to index.html. Returns True if handled.
+
+        index.html is the STANDALONE voice page, and it hardcodes its WebSocket to its
+        own origin. This server speaks no WebSocket, so that page loads, silently fails
+        to connect, never fills its voice list, and leaves the mic button disabled
+        forever. It reads exactly like "the buttons are broken", and it cost a teammate
+        real time. It cannot reach a remote speech service either: it has no ?voice=.
+
+        The console is the only page worth serving here, so "/" IS the console. The query
+        string is carried across, or a redirect would silently drop ?voice= and ?api= and
+        trade one confusing failure for another.
+
+        Handled for HEAD as well as GET: a HEAD that 200s while GET redirects is the kind
+        of inconsistency that makes a health check agree with a browser that disagrees.
+        """
+        if self.path in ("/", "") or self.path.startswith("/?"):
+            qs = self.path[1:] if self.path.startswith("/?") else ""
+            self.send_response(302)
+            self.send_header("Location", f"/console.html{qs}")
+            self.end_headers()
+            return True
+        return False
+
+    def do_GET(self):
+        if not self._redirect_root():
+            super().do_GET()
+
+    def do_HEAD(self):
+        if not self._redirect_root():
+            super().do_HEAD()
+
     def guess_type(self, path):
         return MIME.get(Path(path).suffix.lower()) or super().guess_type(path)
 

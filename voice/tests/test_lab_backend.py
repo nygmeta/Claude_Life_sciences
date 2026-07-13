@@ -55,6 +55,13 @@ def test_spoken_number_becomes_digits():
     ("run a C R P assay", "run a CRP assay"),
     ("T N F alpha please", "TNF-alpha please"),
     ("four hundred microliters", "400 microliters"),
+    # "per well" is load-bearing: the backend's volume override only fires when that exact
+    # phrase is present. These are verbatim from a live session, all meaning "per well",
+    # and each one silently dropped the correction.
+    ("my mistake make it 100 microliters Her will.", "my mistake make it 100 microliters per well."),
+    ("IL-6 with 24 samples. 400 microliters Her well.", "IL-6 with 24 samples. 400 microliters per well."),
+    ("make it 100 microliters per whale", "make it 100 microliters per well"),
+    ("50 microliters per wheel", "50 microliters per well"),
     ("fifty microliters per well", "50 microliters per well"),
     ("twenty four samples", "24 samples"),
     ("five points", "5 points"),
@@ -80,6 +87,15 @@ def test_the_il_mishears_only_fire_when_a_6_or_8_follows():
     # appears.
     assert lb.normalize_transcript("six samples") == "6 samples"
     assert "IL" not in lb.normalize_transcript("six samples")
+
+
+def test_per_well_repair_only_fires_after_a_volume_unit():
+    """Anchored to a unit, so it repairs the phrase where it is load-bearing and leaves
+    ordinary speech alone. "her will" in a sentence about a will is not a pipetting
+    instruction."""
+    for t in ["her will was read", "the well is deep", "he knew her well",
+              "par for the course"]:
+        assert lb.normalize_transcript(t) == t
 
 
 def test_number_words_outside_a_quantity_are_left_alone():

@@ -112,6 +112,24 @@ _ANALYTE_SPACING = [
     # "C R P" -> "CRP", "T N F" -> "TNF" (bare, no alpha)
     (re.compile(r"\bC\s*\.?\s*R\s*\.?\s*P\b", re.I), "CRP"),
     (re.compile(r"\bT\s*\.?\s*N\s*\.?\s*F\b(?!-)", re.I), "TNF"),
+
+    # "per well" is LOAD-BEARING, not decoration. The Lab Agent's volume override only
+    # fires when the literal string "per well" (or "sample") is in the transcript:
+    #
+    #     if vm and ("per well" in text.lower() or "sample" in text.lower() ...)
+    #
+    # and an unstressed "per well" is the kind of thing a recognizer flattens into
+    # whatever it thinks it heard. Measured live, all in one session, all meaning the same
+    # thing: "Her well", "Her will", "per whale". Each one silently dropped the volume
+    # correction, so the plan kept its unsafe 400 uL and the validator kept refusing it.
+    # The scientist says "make it 100" three times and watches nothing change.
+    #
+    # Anchored to a VOLUME UNIT immediately before it, so this only fires where the phrase
+    # is doing that job: "her well" in ordinary speech is left alone.
+    (re.compile(r"\b(microliters?|microlitres?|µl|ul|nanoliters?|nl)\s+"
+                r"(?:per|her|pair|par|para|for)\s*"
+                r"(?:well|will|whale|wheel|wall|wells)\b", re.I),
+     r"\1 per well"),
 ]
 
 # Spoken numbers, for the ranges a protocol actually uses. ASR writes "hundred", the

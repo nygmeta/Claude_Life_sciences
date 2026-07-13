@@ -109,6 +109,10 @@ export class VoiceWidget {
     // resolves when the SOCKET opens, strictly before that message lands, so a host that
     // reads confirmFloor right after connect() reads null. Push it instead.
     this.onLabState   = opts.onLabState   || null;
+    // Fired when the server proposes a correction ({raw, proposed}) instead of vouching for
+    // the transcript. The host RENDERS it and does nothing else: acting on a proposal would
+    // defeat the point, which is that a human confirms the reading before anything is sent.
+    this.onVerify     = opts.onVerify     || null;
 
     this.ws = null;
     this.closing = false;       // disconnect() was called: do not auto-reconnect
@@ -228,9 +232,16 @@ export class VoiceWidget {
   // The host calls this whenever its backend state changes. It ARMS the server's safety gate:
   // while the state says an action is awaiting the user's word, the server refuses transcripts
   // it is not confident about rather than handing the host a possible mishearing.
-  setLabState(state) {
+  // `context` is optional: {questions, reply}, the backend's last question and reply. The
+  // verification layer needs it to resolve a mishearing ("i am six") against what was
+  // actually asked ("which analyte?"). A host that passes nothing behaves exactly as before.
+  setLabState(state, context) {
     this.labState = state;
-    this.send({ type: "set_lab_state", state });
+    this.labContext = context || null;
+    const msg = { type: "set_lab_state", state };
+    if (context && Array.isArray(context.questions)) msg.questions = context.questions;
+    if (context && typeof context.reply === "string") msg.reply = context.reply;
+    this.send(msg);
   }
 
   // The confidence floor a spoken confirmation must clear before the server will vouch for it,
@@ -563,8 +574,25 @@ export class VoiceWidget {
         // the default mode) the moment the assistant gets hushed: an accepted transcript is proof
         // that what interrupted was real speech addressed to us, not room noise.
         if (this.opts.bargeInMode !== "vad") this.interruptSpeech();
-        this.onSafe(this.onTranscript, (m.text || "").trim(), m.confidence);
+        // `raw` is present only when the server's normalizer rewrote what the recognizer
+        // wrote ("i am six" -> "IL-6"). Pass it through as a third argument, so a host that
+        // wants to show its work can, and a host that ignores it is unaffected.
+        this.onSafe(this.onTranscript, (m.text || "").trim(), m.confidence,
+                    { raw: m.raw || null, verified: m.verified === true });
         this.emitTurnMetrics(false, m.confidence);
+        break;
+
+      case "transcript_verify":
+        // The server believes the recognizer misheard, and is ASKING rather than assuming.
+        // It has already spoken "Did you mean: X?"; arm the audio path so that line is not
+        // swallowed by a barge-in that just muted us. The host MUST NOT act on this: it is
+        // a proposal, not a transcript. The scientist's next utterance is the answer, and
+        // only then does a transcript_final arrive.
+        this.armAudio();
+        if (this.onVerify) {
+          try { this.onVerify({ raw: m.raw, proposed: m.proposed }); }
+          catch (e) { /* a host callback must never break the socket loop */ }
+        }
         break;
 
       case "transcript_refused":

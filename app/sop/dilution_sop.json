@@ -1,0 +1,24 @@
+{
+  "sop_id": "SOP-DIL-01",
+  "title": "Acoustic serial dilution (nanoliter, direct)",
+  "intent": "serial_dilution",
+  "version": "1.0",
+  "description": "Direct (non-contact) dilution series: variable compound volume plus diluent backfill to a constant final volume. Suits acoustic dispense (Echo); volumes are too small for a tip-based handler.",
+  "required_parameters": ["compound", "num_points"],
+  "optional_parameters": {
+    "dilution_factor": 2,
+    "final_volume_nL": 1000,
+    "diluent": "RG-DMSO"
+  },
+  "sources": {
+    "compound_well": "A1",
+    "diluent_well": "A2",
+    "diluent_reagent": "RG-DMSO"
+  },
+  "layout": {
+    "labware": [
+      {"id": "compound_source", "type": "corning_96_wellplate_360ul", "role": "samples"},
+      {"id": "dilution_plate", "type": "corning_96_wellplate_360ul", "role": "assay"}
+    ]
+  }
+}

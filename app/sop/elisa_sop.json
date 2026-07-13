@@ -1,0 +1,53 @@
+{
+  "sop_id": "SOP-ELISA-04",
+  "title": "Sandwich ELISA (96-well, HRP/TMB)",
+  "intent": "elisa",
+  "version": "1.2",
+  "description": "Quantitative sandwich ELISA for a single analyte on plasma samples.",
+  "required_parameters": ["target_analyte", "num_samples"],
+  "optional_parameters": {
+    "replicates": 2,
+    "sample_volume_uL": 100,
+    "wash_buffer": "PBST",
+    "plates": 1
+  },
+  "analyte_reagents": {
+    "IL-6": {"capture": "RG-IL6-CAP", "detection": "RG-IL6-DET"}
+  },
+  "layout": {
+    "labware": [
+      {"id": "assay_plate", "type": "corning_96_wellplate_360ul", "role": "assay"},
+      {"id": "sample_plate", "type": "corning_96_wellplate_360ul", "role": "samples"},
+      {"id": "reagent_reservoir", "type": "nest_12_reservoir_15ml", "role": "reagent"},
+      {"id": "tips_300", "type": "opentrons_96_tiprack_300ul", "role": "tips"}
+    ],
+    "controls": {"standards": 8, "blanks": 2}
+  },
+  "steps": [
+    {"step": "coat", "op": "transfer", "reagent": "RG-COAT", "volume_uL": 100,
+     "dest": "assay_plate", "note": "Coat wells with capture antibody in coating buffer"},
+    {"step": "coat_incubate", "op": "incubate", "duration_min": 60, "temperature_c": 4,
+     "note": "Overnight coat abbreviated for demo"},
+    {"step": "wash_1", "op": "wash", "reagent": "RG-WASH", "cycles": 3, "dest": "assay_plate"},
+    {"step": "block", "op": "transfer", "reagent": "RG-BLOCK", "volume_uL": 200,
+     "dest": "assay_plate", "note": "Block non-specific binding"},
+    {"step": "block_incubate", "op": "incubate", "duration_min": 30, "temperature_c": 25},
+    {"step": "wash_2", "op": "wash", "reagent": "RG-WASH", "cycles": 3, "dest": "assay_plate"},
+    {"step": "add_samples", "op": "transfer", "source": "sample_plate",
+     "volume_uL": "{sample_volume_uL}", "dest": "assay_plate",
+     "note": "Transfer plasma samples (per replicate)"},
+    {"step": "sample_incubate", "op": "incubate", "duration_min": 90, "temperature_c": 25},
+    {"step": "wash_3", "op": "wash", "reagent": "RG-WASH", "cycles": 3, "dest": "assay_plate"},
+    {"step": "detection", "op": "transfer", "reagent": "{detection_reagent}", "volume_uL": 100,
+     "dest": "assay_plate", "note": "Add HRP-conjugated detection antibody"},
+    {"step": "detection_incubate", "op": "incubate", "duration_min": 60, "temperature_c": 25},
+    {"step": "wash_4", "op": "wash", "reagent": "RG-WASH", "cycles": 3, "dest": "assay_plate"},
+    {"step": "substrate", "op": "transfer", "reagent": "RG-TMB", "volume_uL": 100,
+     "dest": "assay_plate", "note": "Add TMB substrate; develop in dark"},
+    {"step": "develop", "op": "wait", "duration_min": 15},
+    {"step": "stop", "op": "transfer", "reagent": "RG-STOP", "volume_uL": 50,
+     "dest": "assay_plate", "note": "Add stop solution (2N H2SO4)"},
+    {"step": "read", "op": "manual_step",
+     "note": "Read absorbance at 450 nm on plate reader (not on this deck)"}
+  ]
+}

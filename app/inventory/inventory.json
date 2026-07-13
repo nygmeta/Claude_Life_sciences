@@ -1,0 +1,28 @@
+{
+  "reagents": [
+    {"id": "RG-COAT", "name": "Coating buffer (carbonate-bicarbonate)", "volume_uL": 15000, "expiry": "2026-12-01"},
+    {"id": "RG-BLOCK", "name": "Blocking buffer (1% BSA in PBS)", "volume_uL": 20000, "expiry": "2026-10-15"},
+    {"id": "RG-WASH", "name": "Wash buffer (PBST)", "volume_uL": 250000, "expiry": "2027-01-01"},
+    {"id": "RG-IL6-CAP", "name": "Anti-IL-6 capture antibody", "volume_uL": 1200, "expiry": "2026-09-01"},
+    {"id": "RG-IL6-DET", "name": "Anti-IL-6 detection antibody (HRP working soln)", "volume_uL": 8000, "expiry": "2026-09-01"},
+    {"id": "RG-TMB", "name": "TMB substrate", "volume_uL": 12000, "expiry": "2026-08-01"},
+    {"id": "RG-STOP", "name": "Stop solution (2N H2SO4)", "volume_uL": 12000, "expiry": "2027-03-01", "hazard": "corrosive_acid"},
+    {"id": "RG-DMSO", "name": "DMSO (dilution backfill)", "volume_uL": 10000, "expiry": "2027-06-01"}
+  ],
+  "samples": [
+    {"id": "PL-2026-0708-01", "name": "Plasma sample 01", "collected": "2026-07-08", "type": "plasma"},
+    {"id": "PL-2026-0708-02", "name": "Plasma sample 02", "collected": "2026-07-08", "type": "plasma"},
+    {"id": "PL-2026-0708-03", "name": "Plasma sample 03", "collected": "2026-07-08", "type": "plasma"}
+  ],
+  "labware_loaded": [
+    {"id": "assay_plate", "type": "corning_96_wellplate_360ul", "slot": "1", "well_max_uL": 360, "well_working_uL": 300},
+    {"id": "reagent_reservoir", "type": "nest_12_reservoir_15ml", "slot": "2"},
+    {"id": "sample_plate", "type": "corning_96_wellplate_360ul", "slot": "3", "well_max_uL": 360, "well_working_uL": 300},
+    {"id": "tips_300", "type": "opentrons_96_tiprack_300ul", "slot": "4"},
+    {"id": "compound_source", "type": "corning_96_wellplate_360ul", "slot": "5", "well_max_uL": 360, "well_working_uL": 300},
+    {"id": "dilution_plate", "type": "corning_96_wellplate_360ul", "slot": "6", "well_max_uL": 360, "well_working_uL": 300}
+  ],
+  "pipettes": [
+    {"id": "p300_single", "channels": 1, "min_uL": 20, "max_uL": 300, "tip": "tips_300"}
+  ]
+}

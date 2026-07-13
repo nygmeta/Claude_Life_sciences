@@ -1,0 +1,7 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+anthropic>=0.40
+# Optional: real hardware simulation. Heavy dependency; the demo runs without it
+# (planner + adapter fall back gracefully). Install to get true opentrons.simulate.
+# opentrons>=7.0

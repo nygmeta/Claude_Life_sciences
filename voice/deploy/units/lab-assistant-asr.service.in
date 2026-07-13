@@ -1,0 +1,16 @@
+# Template for the ASR service systemd --user unit. @TOKENS@ are filled in by
+# deploy/install-services.sh; do not install this file directly.
+[Unit]
+Description=lab-assistant ASR service (FunASR, :@LA_ASR_PORT@)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=@LA_APP_DIR@
+Environment=HF_HOME=@LA_HF_HOME@
+ExecStart=@ASR_PY@ @LA_APP_DIR@/asr/server.py --host @LA_BIND_HOST@ --port @LA_ASR_PORT@
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

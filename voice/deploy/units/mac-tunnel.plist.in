@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template for the Cloudflare Tunnel connector LaunchAgent.
+     Placeholder tokens are filled by deploy/install-mac-agents.sh; do not install directly.
+     The token is read at start from the gitignored credentials file, never baked
+     into this plist. SECURITY PRECONDITION (same as deploy/run-tunnel.sh): the
+     app has no auth of its own; publish only while a Cloudflare Access policy
+     gates the hostname at the edge. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>ai.lab-assistant.tunnel</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-c</string>
+    <string>exec /opt/homebrew/bin/cloudflared --config /dev/null --no-autoupdate tunnel run --token "$(cat '@REPO@/credentials/cloudflared_token.txt')"</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>15</integer>
+  <key>StandardOutPath</key><string>@REPO@/logs/agent-tunnel.log</string>
+  <key>StandardErrorPath</key><string>@REPO@/logs/agent-tunnel.log</string>
+</dict>
+</plist>

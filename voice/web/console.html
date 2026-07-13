@@ -274,7 +274,8 @@
       <div class="body" id="convo"><div class="empty">Press <b>Next turn</b> to run the scenario, or switch to Live and type a request.</div></div>
       <div class="composer">
         <input id="input" placeholder="Speak or type a request…" disabled>
-        <button class="btn" id="mic" title="Toggle voice input">🎙 Voice</button>
+        <button class="btn" id="mic" title="Toggle voice input (Live mode)">🎙 Voice</button>
+        <button class="btn" id="spk" title="Speak the agent's replies aloud. Works in Demo too: the mic drives the real backend, but the voice can read a scripted demo turn just as well.">🔊 Speak</button>
         <button class="btn" id="voiceGear" title="Voice settings">⚙</button>
         <button class="btn" id="send" disabled>Send</button>
       </div>
@@ -1133,17 +1134,46 @@ setScenario('elisa');
   // layer hooks "after every turn" and "tell the service the backend's
   // state" without editing a single line of that script.
   const _applyTurn = applyTurn;
+  // Speech OUT is independent of speech IN, which is what lets Demo mode talk.
+  //
+  // The mic only makes sense in Live: a spoken request has to reach a real backend that
+  // can plan it. A spoken REPLY has no such requirement. Demo mode replays fixtures
+  // captured from real backend runs, so the words are real words, and there is no reason
+  // for the assistant to go mute just because the sentence came from a fixture instead of
+  // from Claude. The demo is the thing most people will actually watch, and a silent demo
+  // of a VOICE assistant undersells the entire system.
+  //
+  // Demo mode's promise is that it needs no backend and no network. This keeps that: the
+  // synthesis call is the voice service on the same box, and if it is down, speak() fails
+  // and the demo carries on silently rather than breaking.
+  let speakReplies = loadSettings().speakReplies !== false;   // default ON
+  const spkBtn = $('spk');
+  function paintSpk(){ spkBtn.classList.toggle('on', speakReplies); }
+  paintSpk();
+  spkBtn.onclick = () => {
+    speakReplies = !speakReplies;
+    if (!speakReplies) vw.cancelSpeak();     // stop mid-sentence, do not wait it out
+    paintSpk();
+    saveSettings({ speakReplies });
+  };
+
   applyTurn = function(t, adapterKey){
     _applyTurn(t, adapterKey);
     vw.setLabState(t.state);
-    if (listening && t.reply) vw.speak(t.reply);
+    // Speak whenever the toggle is on, in Demo and in Live alike. Guarded, so a page with
+    // no voice service still runs the console exactly as it did before.
+    if (speakReplies && t && t.reply){
+      try { vw.speak(t.reply); } catch (e) { /* no voice service: stay silent, keep going */ }
+    }
   };
 
   const _setMode = setMode;
   setMode = function(m){
     _setMode(m);
+    // Leaving Live stops the MIC (it has no backend to talk to). It does NOT stop the
+    // voice: a Demo turn is still allowed to be spoken.
     if (m !== 'live' && listening){
-      vw.stopMic(); vw.cancelSpeak();
+      vw.stopMic();
       listening = false; micBtn.classList.remove('on'); setPill('idle');
     }
   };

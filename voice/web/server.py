@@ -54,13 +54,22 @@ WS message contract (kept in sync with the handler below):
     segment was dropped as noise (shown to the user greyed, never accumulated into
     a turn, no reply). Absent on an accepted segment. See "noise gate" below.
     Speech-service mode (`?mode=speech` on the connect URL) is PER-CONNECTION and
-    purely additive. It adds client -> server: set_lab_state {state}, speak
-    {text, voice?}, cancel_speak; and server -> client: transcript_final
-    {text, confidence} and transcript_refused {reason, prob_mean, reprompt}. In that
-    mode `end_turn` commits the turn WITHOUT any reply pipeline, so reply_start /
-    reply_delta / reply_done are never sent and audio comes only from `speak`. A
-    connection that does not ask for it is entirely unaffected. See
-    "speech-service mode" below.
+    purely additive. It adds client -> server: set_lab_state {state, questions?,
+    reply?}, speak {text, voice?}, cancel_speak; and server -> client:
+    transcript_final {text, confidence} and transcript_refused
+    {reason, prob_mean, reprompt}. In that mode `end_turn` commits the turn WITHOUT
+    any reply pipeline, so reply_start / reply_delta / reply_done are never sent and
+    audio comes only from `speak`. A connection that does not ask for it is entirely
+    unaffected. See "speech-service mode" below.
+    Intent verification (LA_VERIFY_INTENT, speech mode only) adds server -> client:
+    transcript_verify {raw, proposed}, sent INSTEAD of transcript_final when the
+    recognizer was confident but probably wrong ("i am six" for "IL-6"). The proposed
+    reading is also SPOKEN ("Did you mean: IL-6?"), and the console is given nothing
+    to POST until the next turn confirms it, which sends transcript_final carrying the
+    PROPOSED text plus an additive `verified: true`. A control utterance (confirm /
+    cancel / stop) and an armed backend are NEVER verified. Off, or on a turn it
+    declines to verify, the message stream is exactly what it was before. See
+    "intent verification" below.
 
 Identity + scope (multi-client isolation): a connection's identity is the `email`
 query param on the WS connect URL (`<ws base>/?email=<addr>`), lowercased + stripped.
@@ -175,6 +184,14 @@ Env:
                         on prob_mean. "0" disables. Missing confidence fails open.)
   LA_PENDING_TTL_S  120  (a pending confirmation older than this is cancelled,
                         not confirmed, on the next turn. "0" disables expiry.)
+  LA_VERIFY_INTENT  1   (speech mode: ask the user to confirm a reading when the
+                        recognizer looks CONFIDENTLY wrong. "0"/"false"/"" = off, and
+                        off is byte-identical to pre-change behavior. A control word
+                        and an armed backend are never verified, at any setting.)
+  LA_VERIFY_MAXTOK  128 (token budget for that call: the answer is one sentence)
+  LA_VERIFY_TIMEOUT_S 2.5  (cap on the call; it sits in front of the console's turn.
+                        On timeout, as on every other failure, it fails OPEN and the
+                        raw transcript is handed over unverified.)
   LA_ANTHROPIC_API_KEY   (falls back to ../credentials/anthropic_key.txt)
   LA_LOG_FILE       ../data/latency.jsonl   (per-turn / per-synth latency records)
   LA_OPERATOR_EMAILS   comma-separated emails treated as operators (see-all view).
@@ -337,6 +354,21 @@ CONFIRM_FLOOR = float(os.environ.get("LA_CONFIRM_FLOOR", "0.40"))
 # after the readback cannot fire an action the user has moved on from. Default
 # 120 s; "0" disables.
 PENDING_TTL_S = float(os.environ.get("LA_PENDING_TTL_S", "120"))
+# Intent verification (speech mode only; see "intent verification" below). The
+# recognizer mishears domain speech CONFIDENTLY: "Run an ELISA on today's plasma
+# samples" came back as "Ron Eliza.", "IL-6" as "i am six", "per well" as "Her
+# will", each at high confidence. Confidence and correctness are different axes, so
+# no floor can catch these: the recognizer was sure, and wrong. The only fix is to
+# propose a reading and let the human confirm it. Default ON; "0"/"false"/"" makes
+# the layer inert (no extra call, no extra message, byte-identical to before).
+VERIFY_INTENT = os.environ.get("LA_VERIFY_INTENT", "1").strip().lower() not in ("0", "false", "")
+# The answer is one repaired sentence, never prose, so the budget is small.
+VERIFY_MAXTOK = int(os.environ.get("LA_VERIFY_MAXTOK", "128"))
+# The call sits in FRONT of the console's turn, so it is bounded hard: a slow
+# verifier is a broken verifier. On timeout (and on every other failure) it fails
+# OPEN, handing the raw transcript over unverified, because a verification layer
+# that stalls the conversation whenever the API hiccups is worse than none at all.
+VERIFY_TIMEOUT_S = float(os.environ.get("LA_VERIFY_TIMEOUT_S", "2.5"))
 
 STATIC_DIR = Path(__file__).resolve().parent
 asr_client = AsyncOpenAI(base_url=FUNASR_URL, api_key="unused")
@@ -1088,7 +1120,8 @@ class Session:
                  "reply_task", "reply_ctx", "spec_fired", "spec_discarded",
                  "scope", "owner_email", "is_operator", "pending_action", "lab_stub",
                  "client_info", "cap_n", "captured", "lab_backend",
-                 "speech_mode", "lab_state", "speak_task")
+                 "speech_mode", "lab_state", "speak_task",
+                 "lab_questions", "lab_reply", "pending_verify")
 
     def __init__(self):
         self.history = []   # [{"role": "user"|"assistant", "content": str}, ...]
@@ -1167,6 +1200,20 @@ class Session:
         # conversation we do not own. Physical/robot state, not conversation state, so
         # it survives a new_session (like lab_stub).
         self.lab_state = None
+        # What the console's backend just SAID, as of its last set_lab_state: the
+        # questions it asked (a list of strings) and its last reply text. Both
+        # optional, both None until a console sends them. This is the context that
+        # makes intent verification work: knowing the assistant just asked "Which
+        # analyte should I run the ELISA for? (e.g. IL-6)" is what lets a verifier
+        # resolve "i am six" to "IL-6". Conversation state of a conversation we do
+        # not own, carried across a new_session for the same reason lab_state is.
+        self.lab_questions = None
+        self.lab_reply = None
+        # A verification we have SPOKEN and are waiting for the user to answer:
+        # {"raw": <what the recognizer heard>, "proposed": <what we think they meant>}
+        # or None. While it is set, the console has been sent NOTHING to POST, and the
+        # next committed turn is read as the answer (see _resolve_pending_verify).
+        self.pending_verify = None
         # The in-flight `speak` task (speech mode), or None. At most one at a time:
         # a new speak supersedes the previous one, and cancel_speak (barge-in) drops
         # it. Kept separate from reply_task, which is the LLM reply path this mode
@@ -1234,6 +1281,11 @@ def new_session_preserving(prev: Session) -> Session:
     # does not un-arm a robot that is still awaiting confirmation.
     nxt.speech_mode = prev.speech_mode
     nxt.lab_state = prev.lab_state
+    # The console's last question / reply belong to ITS conversation, which a new
+    # transcript here does not end. pending_verify is deliberately NOT carried: it is
+    # an unanswered question of OURS about a turn that no longer exists.
+    nxt.lab_questions = prev.lab_questions
+    nxt.lab_reply = prev.lab_reply
     return nxt
 
 
@@ -2870,6 +2922,15 @@ async def handle_set_lab_state(ws, sess: Session, msg):
     machine."""
     state = msg.get("state")
     sess.lab_state = state if isinstance(state, str) and state.strip() else None
+    # Optional context for intent verification: what the backend just ASKED and what
+    # it last SAID. Updated only when the KEY IS PRESENT, so a console that sends
+    # `{state}` alone (every console that predates this feature) neither sets nor
+    # clobbers them, and behaves exactly as it did before.
+    if "questions" in msg:
+        sess.lab_questions = _clean_questions(msg.get("questions"))
+    if "reply" in msg:
+        reply = msg.get("reply")
+        sess.lab_reply = reply.strip()[:_VERIFY_CTX_MAX] if isinstance(reply, str) and reply.strip() else None
     # Echo the floor back with the state. The console's settings drawer DISPLAYS this
     # (read-only) so an operator can see the number the safety gate is judging against,
     # next to the confidence the ASR actually reported. Showing it is useful; letting
@@ -2998,6 +3059,226 @@ def _abort_speak_task(sess: Session) -> None:
     sess.speak_task = None
 
 
+# --------------------------------------------------------- intent verification
+# The recognizer does not just fail QUIETLY, it fails CONFIDENTLY. Measured on live
+# sessions, each of these came back as a high-confidence transcription:
+#
+#     spoken "Run an ELISA on today's plasma samples"  ->  "Ron Eliza."
+#     spoken "IL-6"                                    ->  "i am six"
+#     spoken "per well"                                ->  "Her will"
+#
+# Confidence and correctness are different axes. The confirmation floor above keys on
+# prob_mean, so it cannot see any of these: the model was SURE. The only thing that
+# can catch a confident mishearing is the person who spoke, so we propose the reading
+# we think they meant ("Did you mean: IL-6?") and hand nothing to the console until
+# they say yes.
+#
+# THE SAFETY BOUNDARY (_verify_excluded): a control utterance is NEVER verified, and
+# neither is any turn while the console's backend is armed. Everything else here is a
+# convenience; those two exclusions are the design. A model that can helpfully repair
+# a garbled command can just as helpfully repair a garbled CANCEL, and that would put
+# a language model between a scientist saying stop and a centrifuge.
+#
+# Failure is always OPEN: no key, timeout, API error, unparseable answer all end with
+# the RAW transcript handed over exactly as it is today. A verification layer that
+# breaks the conversation when the API hiccups is worse than no verification layer.
+VERIFY_SYSTEM = (
+    "You correct speech-recognition errors for a LAB AUTOMATION assistant. A "
+    "scientist speaks to it at the bench and the recognizer often mishears domain "
+    "terms, confidently: \"IL-6\" comes back as \"i am six\", \"per well\" as \"Her "
+    "will\", \"run an ELISA\" as \"Ron Eliza\".\n\n"
+    "You are given the raw transcript and the assistant's last question. Return the "
+    "most likely INTENDED utterance.\n\n"
+    "Rules:\n"
+    "- PRESERVE ALL NUMBERS EXACTLY. Never change a quantity, a volume, a count, a "
+    "concentration or a well name. If the speaker said 50, the answer says 50.\n"
+    "- If the transcript already looks correct, return it UNCHANGED.\n"
+    "- NEVER invent parameters the speaker did not say. If they did not name a "
+    "volume, do not add one. Repair what was misheard; do not complete the request.\n"
+    "- The assistant's last question is your strongest clue: an answer to \"Which "
+    "analyte?\" is an analyte.\n\n"
+    "Domain vocabulary: ELISA, serial dilution, IL-6, IL-8, TNF-alpha, CRP, "
+    "microliters, nanoliters, samples, replicates, wells, plate, Opentrons, Echo.\n\n"
+    "Answer with JSON and nothing else: {\"text\": \"<the intended utterance>\"}"
+)
+# Caps on the console-supplied context, which is untrusted input to a prompt: keep a
+# runaway backend reply from becoming the bulk of the call.
+_VERIFY_CTX_MAX = 500
+_VERIFY_MAX_QUESTIONS = 4
+# The model was told to answer with JSON and nothing else, but a small model
+# occasionally wraps it in a fence or a sentence. Take the outermost {...} and try it.
+_VERIFY_JSON_RE = re.compile(r"\{.*\}", re.S)
+# Materiality is judged on the WORDS: casing and punctuation differences are the
+# recognizer's, not the speaker's, and re-asking "did you mean X?" about a comma
+# would train the user to stop listening to the question.
+_VERIFY_PUNCT_RE = re.compile(r"[^\w\s]+")
+# What we say when the user rejects our reading. Deliberately short and blameless:
+# they are about to repeat themselves, which is friction enough.
+VERIFY_RETRY = "Sorry, please say that again."
+
+
+def _clean_questions(raw):
+    """The console's `questions` field, coerced to a capped list of non-empty
+    strings, or None. Client-supplied and prompt-bound, so it is bounded here rather
+    than trusted."""
+    if not isinstance(raw, list):
+        return None
+    out = [str(q).strip()[:_VERIFY_CTX_MAX] for q in raw[:_VERIFY_MAX_QUESTIONS] if str(q).strip()]
+    return out or None
+
+
+def _verify_key(text: str) -> str:
+    """The comparison form of an utterance: lowercased, punctuation dropped,
+    whitespace collapsed. Two texts with the same key say the same thing."""
+    return " ".join(_VERIFY_PUNCT_RE.sub(" ", (text or "").lower()).split())
+
+
+def materially_same(a: str, b: str) -> bool:
+    return _verify_key(a) == _verify_key(b)
+
+
+def _verify_excluded(sess: Session, text: str):
+    """Why this turn must NOT be verified, or None when verification may run. These
+    two exclusions are the entire safety boundary of the layer:
+
+      "control"  a confirm, a cancel, or an emergency stop. These never go to a
+                 model. They are matched by regex, acted on literally, and never
+                 rewritten, because a model that can "helpfully" repair a garbled
+                 command could just as easily repair a garbled CANCEL into something
+                 else, and that would put a language model between a scientist saying
+                 stop and a centrifuge.
+      "armed"    the console's backend is armed: its next affirmative EXECUTES a
+                 physical protocol, and that turn already belongs to the confirmation
+                 floor (lab_backend.blocks_confirmation). A misheard "yes" there must
+                 be REFUSED, not "corrected". Correcting it is precisely how a machine
+                 starts by accident.
+    """
+    if (lab_gate.is_confirm(text, strict=False) or lab_gate.is_cancel(text)
+            or lab_gate.is_stop(text)):
+        return "control"
+    if lab_backend.armed(sess.lab_state):
+        return "armed"
+    return None
+
+
+def build_verify_messages(raw: str, questions, reply) -> list:
+    """The single user message for the verifier: what the assistant just asked, what
+    it last said, then the raw transcript last so it is unmistakably the thing being
+    repaired."""
+    lines = []
+    if questions:
+        lines.append("The assistant just asked:")
+        lines.extend(f"  {q}" for q in questions)
+    elif reply:
+        lines.append("The assistant just said:")
+        lines.append(f"  {reply}")
+    else:
+        lines.append("The assistant has not asked anything yet.")
+    if questions and reply:
+        lines.append(f"Its full last reply: {reply}")
+    lines.append("")
+    lines.append(f"Raw transcript: {raw!r}")
+    lines.append("What did the speaker most likely intend to say?")
+    return [{"role": "user", "content": "\n".join(lines)}]
+
+
+async def _verify_llm_call(raw: str, questions, reply) -> str:
+    """The Anthropic side of the verifier: returns the model's raw text answer.
+    Reuses the ONE client and the ONE model the rest of the file uses. Raising is
+    fine: propose_intent catches everything and fails open."""
+    resp = await llm_client.messages.create(
+        model=LLM_MODEL, max_tokens=VERIFY_MAXTOK, system=VERIFY_SYSTEM,
+        messages=build_verify_messages(raw, questions, reply))
+    return "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
+
+
+def parse_proposal(answer: str):
+    """Pull {"text": "..."} out of the model's answer, or None when it is unusable.
+    Defensive on purpose: the model was told to answer with JSON and nothing else, and
+    a small model does not always listen."""
+    m = _VERIFY_JSON_RE.search(answer or "")
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(0))
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    text = data.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return None
+    return text.strip()
+
+
+async def propose_intent(sess: Session, text: str):
+    """The most likely INTENDED utterance behind `text`, or None when there is nothing
+    to ask the user about: the layer is off, there is no API key, this turn must not be
+    verified (see _verify_excluded), or the model did not come back with a usable
+    answer.
+
+    None is the FAIL-OPEN value, and every failure path returns it: a timeout, an API
+    error, an unparseable answer. The caller treats None exactly as it treats "the
+    proposal matches what we were going to send anyway", which is the code path that
+    existed before this layer, so a broken verifier costs the turn nothing."""
+    if not VERIFY_INTENT or llm_client is None or not text:
+        return None
+    if _verify_excluded(sess, text) is not None:
+        return None
+    try:
+        answer = await asyncio.wait_for(
+            _verify_llm_call(text, sess.lab_questions, sess.lab_reply),
+            timeout=VERIFY_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        print(f"[verify] timed out after {VERIFY_TIMEOUT_S}s, failing open", flush=True)
+        return None
+    except Exception as e:  # noqa: BLE001  # never lose a turn to the verifier
+        print(f"[verify] failed ({type(e).__name__}: {e}), failing open", flush=True)
+        return None
+    return parse_proposal(answer)
+
+
+async def _resolve_pending_verify(ws, sess: Session, user_text: str, asr_rec) -> bool:
+    """Read this turn as the ANSWER to the "Did you mean ...?" we already spoke.
+    Returns True when the turn was consumed as an answer (the caller is done), False
+    when it was not an answer at all and must be processed from the top as a fresh
+    attempt.
+
+    A confirm hands the console the PROPOSED text: this is the corrected utterance
+    finally reaching the backend, and the only place a transcript the recognizer did
+    not produce is ever handed over. A cancel hands over NOTHING and asks the user to
+    repeat: a rejected reading must not degrade into the raw one, since the raw one is
+    what we already knew was wrong."""
+    pend = sess.pending_verify
+    sess.pending_verify = None                     # answered either way: never reused
+
+    # An emergency stop is a stop FIRST and an answer second, so it is checked ahead of
+    # is_cancel (which also matches "stop"): it drops the proposal, then falls through
+    # to be handed to the console like any other control word. Nothing this layer does
+    # may swallow a stop.
+    if lab_gate.is_stop(user_text):
+        return False
+
+    if lab_gate.is_confirm(user_text, strict=False):
+        text = lab_backend.normalize_transcript(pend["proposed"])
+        await send(ws, type="transcript_final", text=text, verified=True,
+                   confidence={"prob_mean": _turn_prob_mean(asr_rec),
+                               "prob_min": _turn_prob_min(asr_rec)})
+        log_event({"kind": "speech_turn", "session": sess.sid, "turn": sess.seq,
+                   "status": "verified", "lab_state": sess.lab_state, "asr": asr_rec,
+                   "raw": pend["raw"], "proposed": pend["proposed"]})
+        return True
+
+    if lab_gate.is_cancel(user_text):
+        await _start_speak(ws, sess, VERIFY_RETRY)
+        log_event({"kind": "speech_turn", "session": sess.sid, "turn": sess.seq,
+                   "status": "verify_rejected", "lab_state": sess.lab_state,
+                   "asr": asr_rec, "raw": pend["raw"], "proposed": pend["proposed"]})
+        return True
+
+    return False   # not an answer: a fresh attempt, processed from the top
+
+
 async def handle_end_turn_speech(ws, sess: Session):
     """Commit the turn WITHOUT replying to it: assemble the accumulated segments,
     apply the gates, and answer with exactly one of transcript_final (the console may
@@ -3020,6 +3301,14 @@ async def handle_end_turn_speech(ws, sess: Session):
                          handed over at all. We also SPEAK the reprompt, because the
                          user needs to hear why nothing happened: silence after saying
                          "yes" is the exact failure this mode exists to prevent.
+      transcript_verify  we heard something CLEARLY, and we think it is wrong anyway
+                         (LA_VERIFY_INTENT, see "intent verification" above). The
+                         reading we believe was intended is spoken back as a question
+                         and nothing is handed over until the user confirms it. A
+                         confirm on the next turn sends transcript_final with the
+                         PROPOSED text (verified: true); a cancel sends nothing at all.
+                         Never reached for a control word or while the backend is
+                         armed: those turns belong to the floor above.
 
     A missing confidence block fails OPEN (accepted), matching every other floor in
     this file: the mock and a degraded-but-working ASR supply no confidence, and must
@@ -3039,7 +3328,12 @@ async def handle_end_turn_speech(ws, sess: Session):
     prob_mean = _turn_prob_mean(asr_rec)
     prob_min = _turn_prob_min(asr_rec)
 
+    # The confirmation floor stays FIRST and stays untouched. An armed backend's turn
+    # belongs to it alone: nothing below may reinterpret a turn it has refused, and an
+    # outstanding proposal does not survive a refusal (we are no longer sure enough
+    # about anything to be asking a follow-up question).
     if lab_backend.blocks_confirmation(sess.lab_state, prob_mean):
+        sess.pending_verify = None
         await send(ws, type="transcript_refused", reason="low_confidence_confirmation",
                    prob_mean=prob_mean, reprompt=lab_backend.REPROMPT)
         await _start_speak(ws, sess, lab_backend.REPROMPT)   # say it out loud, not just on screen
@@ -3048,9 +3342,44 @@ async def handle_end_turn_speech(ws, sess: Session):
                    "lab_state": sess.lab_state, "asr": asr_rec})
         return
 
+    # A spoken "Did you mean ...?" is outstanding: this turn is its answer, unless it
+    # is not one at all, in which case it falls through and is processed from the top
+    # as a fresh attempt (the user simply said it again).
+    if sess.pending_verify is not None and await _resolve_pending_verify(ws, sess, user_text, asr_rec):
+        return
+
     text = lab_backend.normalize_transcript(user_text)
+
+    # Materiality is judged against the text we would OTHERWISE HAND OVER, not against
+    # the raw transcript, because normalize_transcript is not cosmetic: it already fixes
+    # "i am six" to "IL-6" and "microliters her will" to "microliters per well",
+    # deterministically and for free. Comparing against the raw text would stop the turn
+    # to ask about mishearings the pipeline already gets right, which buys nothing and
+    # costs the user a confirmation round trip on the exact utterances that used to work.
+    # We interrupt only when the model disagrees with what the deterministic path was
+    # about to send. A None proposal (off, excluded, or failed) never interrupts.
+    proposed = await propose_intent(sess, user_text)
+    if proposed is not None and not materially_same(proposed, text):
+        sess.pending_verify = {"raw": user_text, "proposed": proposed}
+        await send(ws, type="transcript_verify", raw=user_text, proposed=proposed)
+        # Ask the question, do not read the mishearing back. The raw transcript is
+        # already on the user's screen, so "I heard Ron Eliza" spends the one utterance
+        # we have telling them something they can already see.
+        await _start_speak(ws, sess, f"Did you mean: {proposed}?")
+        log_event({"kind": "speech_turn", "session": sess.sid, "turn": sess.seq,
+                   "status": "verify", "lab_state": sess.lab_state, "asr": asr_rec,
+                   "raw": user_text, "proposed": proposed})
+        return   # no transcript_final: the console has nothing to POST until they say yes
+
+    # Carry the RAW text when the normalizer changed it, so the client can show its work.
+    # The cheap deterministic layer fixes most of what the recognizer gets wrong ("i am six"
+    # -> "IL-6"), and until now it did so invisibly: the transcript panel showed only the
+    # corrected text, so a reader could not tell that anything had been misheard, let alone
+    # caught. That makes a working system look like a lucky one. Sent only when it differs,
+    # so an unchanged transcript stays exactly as it was on the wire.
+    extra = {"raw": user_text} if user_text and user_text != text else {}
     await send(ws, type="transcript_final", text=text,
-               confidence={"prob_mean": prob_mean, "prob_min": prob_min})
+               confidence={"prob_mean": prob_mean, "prob_min": prob_min}, **extra)
     log_event({"kind": "speech_turn", "session": sess.sid, "turn": sess.seq,
                "status": "accepted", "lab_state": sess.lab_state, "asr": asr_rec,
                "normalized": text != user_text})

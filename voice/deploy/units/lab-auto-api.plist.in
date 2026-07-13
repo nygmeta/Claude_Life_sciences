@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Template for the Lab Agent API LaunchAgent (rendered by install-mac-agents.sh).
+
+     Binds to 127.0.0.1 ONLY. The API has no authentication of its own, so it must never
+     be reachable except through the orchestrator or an edge that fronts it. Nothing here
+     listens on a public interface.
+
+     RunAtLoad + KeepAlive: it comes back after a crash, a logout, or a reboot, which is
+     the whole point of this file. A demo that dies when the laptop sleeps is not deployed,
+     it is merely running.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>@LABEL@</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@VENV@/bin/python</string>
+    <string>-m</string><string>uvicorn</string>
+    <string>app.main:app</string>
+    <string>--host</string><string>127.0.0.1</string>
+    <string>--port</string><string>@BACKEND_PORT@</string>
+    <string>--log-level</string><string>warning</string>
+  </array>
+  <key>WorkingDirectory</key><string>@ROOT@</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>ANTHROPIC_API_KEY</key><string>@ANTHROPIC_KEY@</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>@VOICE@/logs/lab-agent.log</string>
+  <key>StandardErrorPath</key><string>@VOICE@/logs/lab-agent.log</string>
+</dict>
+</plist>

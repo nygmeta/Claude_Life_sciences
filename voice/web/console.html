@@ -207,6 +207,9 @@
   /* Stated explicitly rather than inherited from .btn:disabled: an emoji is drawn by the
      font's own colour layers, and dimming the BUTTON is what actually greys it. Matches
      the Send button's .32 exactly, so a disabled mic reads the same as a disabled Send. */
+  /* The recognizer's raw output, shown under the corrected bubble. Deliberately quiet: it
+     is the footnote, not the headline. What was ACTED on is the corrected text. */
+  .heard{margin-top:6px;font:400 11px/1.4 var(--mono,ui-monospace,monospace);color:var(--dim);opacity:.75}
   .btn.icon:disabled{opacity:.32;cursor:not-allowed;filter:grayscale(1)}
   .btn.icon:disabled:hover{border-color:var(--line)}
   #spk.on{background:var(--cyan);color:#04222a;border-color:var(--cyan)}
@@ -865,16 +868,51 @@ setScenario('elisa');
   }
 
   const vw = new VoiceWidget({
-    wsUrl: 'ws://' + location.host + '/?mode=speech',
-    onTranscript: (text) => {
+    // wss:// on an https page, or the browser blocks the socket as mixed content and the
+    // voice half is simply never there: no voices, no mic, no error a user can act on.
+    // The page is https the moment it is served over the tunnel, which is exactly when
+    // nobody is standing next to the machine to notice.
+    wsUrl: (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/?mode=speech',
+    onTranscript: (text, confidence, meta) => {
       setCaption('');
       // Accepted speech = typed input: same path as pressing Send.
       $('input').value = text;
       liveSend();
+      // SHOW THE CHEAP LAYER'S WORK. When the deterministic normalizer rewrote what the
+      // recognizer heard ("i am six" -> "IL-6"), say so under the bubble. Without this the
+      // panel shows only the corrected text, and a reader cannot tell that anything was
+      // misheard, let alone caught: a working system ends up looking like a lucky one.
+      // The corrected text is what was ACTED on, so it stays the bubble; the raw text is
+      // the footnote, not the headline.
+      const raw = meta && meta.raw;
+      if (raw && raw !== text) {
+        const bubbles = $('convo').querySelectorAll('.turn.sci .bubble');
+        const last = bubbles[bubbles.length - 1];
+        if (last) {
+          const n = document.createElement('div');
+          n.className = 'heard';
+          n.textContent = 'heard: "' + raw + '"';
+          last.appendChild(n);
+        }
+      }
     },
     onRefused: ({reason, prob_mean, reprompt}) => {
       // MUST NOT call liveSend / POST here, see header comment above.
       setCaption(reprompt || reason || 'Not confident in what was heard, please repeat.', true);
+    },
+    // The recognizer mishears domain speech CONFIDENTLY ("Ron Eliza" for "Run an ELISA"),
+    // so a confidence floor cannot catch it: it was sure, and wrong. The server proposes a
+    // reading and the scientist confirms it, which is the safe shape (the model proposes,
+    // the human disposes) and never applies to confirm / cancel / stop.
+    //
+    // Render BOTH: what was heard, and what the assistant thinks was meant. Then STOP.
+    // Nothing is POSTed until the scientist says yes, so a wrong guess cannot reach the
+    // backend, let alone a machine.
+    onVerify: ({raw, proposed}) => {
+      setCaption('');
+      addTurn('scientist', raw);
+      addTurn('agent', 'Did you mean: ' + proposed + '?');
+      // the server has already spoken it; the answer arrives as the next turn.
     },
     onPartial: (text) => { setCaption(text, false); },
     onStatus: (status) => { setPill(status); },
@@ -1238,7 +1276,11 @@ setScenario('elisa');
     const demoKey = (S.mode === 'demo') ? (S.scenario + ':' + S.step) : null;
 
     _applyTurn(t, adapterKey);
-    vw.setLabState(t.state);
+    // Send the QUESTION along with the state, not just the state. Knowing the assistant
+    // just asked "Which analyte should I run the ELISA for? (e.g. IL-6)" is what lets the
+    // verification layer resolve "i am six" to "IL-6": without that context it is guessing
+    // at a bare string, with it, it is answering a question.
+    vw.setLabState(t.state, { questions: t.questions || [], reply: t.reply || '' });
     if (!(speakReplies && t && t.reply)) return;
 
     // LIVE TTS FIRST, pre-rendered clip as the fallback.

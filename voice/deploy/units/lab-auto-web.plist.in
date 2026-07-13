@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Template for the orchestrator LaunchAgent (rendered by install-mac-agents.sh).
+
+     Serves console.html and the voice WebSocket on @WS_PORT@, and holds the seam to the
+     Lab Agent API on loopback. Binds to 127.0.0.1: the only way in from outside is the
+     Cloudflare tunnel, so there is no LAN exposure even on an untrusted network.
+
+     RunAtLoad + KeepAlive, so it survives a crash, a logout, and a reboot.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>@LABEL@</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@VENV@/bin/python</string>
+    <string>@VOICE@/web/server.py</string>
+  </array>
+  <key>WorkingDirectory</key><string>@VOICE@</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>LA_WS_HOST</key><string>127.0.0.1</string>
+    <key>LA_WS_PORT</key><string>@WS_PORT@</string>
+    <key>LA_LAB_MODE</key><string>1</string>
+    <key>LA_LAB_BACKEND_URL</key><string>http://127.0.0.1:@BACKEND_PORT@</string>
+    <key>LA_FUNASR_URL</key><string>http://127.0.0.1:@ASR_PORT@/v1</string>
+    <key>LA_TTS_MODELS</key><string>gepard-1.0=http://127.0.0.1:@TTS_PORT@</string>
+    <key>LA_TTS_URL</key><string>http://127.0.0.1:@TTS_PORT@</string>
+    <key>LA_ANTHROPIC_API_KEY</key><string>@ANTHROPIC_KEY@</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>@VOICE@/logs/web.log</string>
+  <key>StandardErrorPath</key><string>@VOICE@/logs/web.log</string>
+</dict>
+</plist>

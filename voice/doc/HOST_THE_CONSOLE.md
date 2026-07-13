@@ -28,8 +28,9 @@ Everything below happens on **the machine that sits on the robot's LAN**. Nothin
 ```bash
 git clone <repo-url>
 cd <repo>
-git checkout voice-stack       # until the voice branch is merged to main
 ```
+
+`main` is the right branch. The voice stack is merged into it, so there is nothing to check out.
 
 ### 2. Give it the key
 

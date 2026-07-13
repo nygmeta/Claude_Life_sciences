@@ -865,7 +865,11 @@ setScenario('elisa');
   }
 
   const vw = new VoiceWidget({
-    wsUrl: 'ws://' + location.host + '/?mode=speech',
+    // wss:// on an https page, or the browser blocks the socket as mixed content and the
+    // voice half is simply never there: no voices, no mic, no error a user can act on.
+    // The page is https the moment it is served over the tunnel, which is exactly when
+    // nobody is standing next to the machine to notice.
+    wsUrl: (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/?mode=speech',
     onTranscript: (text) => {
       setCaption('');
       // Accepted speech = typed input: same path as pressing Send.

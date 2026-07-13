@@ -36,6 +36,13 @@ def test_spoken_number_becomes_digits():
 
 
 @pytest.mark.parametrize("said,want", [
+    # A scientist SPELLS the acronym out loud, and the recognizer writes the letters
+    # apart. All of these were seen on the real stack for the same spoken "IL-6".
+    ("I L 6. 5 samples", "IL-6. 5 samples"),
+    ("I L 6.", "IL-6."),
+    ("I.L. 6 with 24 samples", "IL-6 with 24 samples"),
+    ("run a C R P assay", "run a CRP assay"),
+    ("T N F alpha please", "TNF-alpha please"),
     ("four hundred microliters", "400 microliters"),
     ("fifty microliters per well", "50 microliters per well"),
     ("twenty four samples", "24 samples"),

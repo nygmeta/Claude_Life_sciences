@@ -78,9 +78,19 @@ CONFIRM_FLOOR = float(os.environ.get("LA_CONFIRM_FLOOR", "0.40"))
 # Canonicalizing the transcript is the speech half's job, not the planner's: the
 # planner should not have to know how an acoustic model spells things. So the seam
 # normalizes here, on the way out, and the backend keeps parsing clean text.
+# A scientist SPELLS an acronym out loud ("eye ell six"), and the recognizer writes the
+# letters the way it heard them: as separate letters. Observed, all for the same spoken
+# "IL-6": "IL 6", "I L 6", "I L 6." Anything that does not collapse back to IL-6 leaves
+# the analyte slot empty, and the backend then re-asks "which analyte?" forever. So match
+# the letters with optional spaces and periods BETWEEN them, not just around them.
 _ANALYTE_SPACING = [
-    (re.compile(r"\bIL\s*[-\s]?\s*(\d)\b", re.I), r"IL-\1"),          # "IL 6"   -> "IL-6"
-    (re.compile(r"\bTNF\s*[-\s]?\s*alpha\b", re.I), "TNF-alpha"),     # "TNF alpha"
+    # "I L 6", "I.L. 6", "IL 6", "IL-6" -> "IL-6"   (same for IL-8)
+    (re.compile(r"\bI\s*\.?\s*L\s*\.?\s*[-\s]?\s*(\d)\b", re.I), r"IL-\1"),
+    # "T N F alpha", "TNF alpha" -> "TNF-alpha"
+    (re.compile(r"\bT\s*\.?\s*N\s*\.?\s*F\s*\.?\s*[-\s]?\s*alpha\b", re.I), "TNF-alpha"),
+    # "C R P" -> "CRP", "T N F" -> "TNF" (bare, no alpha)
+    (re.compile(r"\bC\s*\.?\s*R\s*\.?\s*P\b", re.I), "CRP"),
+    (re.compile(r"\bT\s*\.?\s*N\s*\.?\s*F\b(?!-)", re.I), "TNF"),
 ]
 
 # Spoken numbers, for the ranges a protocol actually uses. ASR writes "hundred", the

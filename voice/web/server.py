@@ -183,9 +183,11 @@ from websockets.http11 import Response
 
 try:                       # imported as the `web.server` module (tests)
     from web import addressed as addressed_mod
+    from web import lab_backend
     from web import lab_gate
 except ImportError:        # run directly as web/server.py (local smoke)
     import addressed as addressed_mod
+    import lab_backend
     import lab_gate
 
 WS_HOST = os.environ.get("LA_WS_HOST", "0.0.0.0")
@@ -255,6 +257,15 @@ SYSTEM_PROMPT = (
 # When "0"/"false"/"" everything lab-related is inert and behavior is exactly
 # pre-change: no tools passed, base system prompt, no gate, no fast-path stop.
 LAB_MODE = os.environ.get("LA_LAB_MODE", "1").strip().lower() not in ("0", "false", "")
+
+# Never let TTS speak text the confirmation gate has not cleared (see the buffer in
+# stream_llm's tool loop). Costs nothing on a tool-calling turn, because the model
+# emits no text before the tool call anyway. On a turn that calls NO tool (ordinary
+# chat while lab mode is on) it does cost the sentence-by-sentence stream: that
+# reply is released when generation completes rather than as it is written, so first
+# audio waits for the last token. Set to 0 to trade the guarantee back for the
+# stream.
+STRICT_GATE_AUDIO = os.environ.get("LA_STRICT_GATE_AUDIO", "1").strip().lower() not in ("0", "false", "")
 LAB_SYSTEM_PROMPT = SYSTEM_PROMPT + "\n\n" + lab_gate.LAB_SYSTEM_SUFFIX
 # Max streaming tool-use round trips per turn, so a mis-behaving loop cannot spin.
 LAB_TOOL_MAX_ITERS = 4
@@ -1009,7 +1020,7 @@ class Session:
                  "tts_model", "tts_params", "messages", "name", "started_at",
                  "reply_task", "reply_ctx", "spec_fired", "spec_discarded",
                  "scope", "owner_email", "is_operator", "pending_action", "lab_stub",
-                 "client_info", "cap_n", "captured")
+                 "client_info", "cap_n", "captured", "lab_backend")
 
     def __init__(self):
         self.history = []   # [{"role": "user"|"assistant", "content": str}, ...]
@@ -1070,6 +1081,12 @@ class Session:
         # In-memory lab state for this connection (PART B). Physical state, not
         # conversation state, so new_session carries it over (like the TTS prefs).
         self.lab_stub = lab_gate.AutomationStub()
+        # The integration seam (LA_LAB_BACKEND_URL). When configured, lab turns are
+        # driven by the Lab Agent API instead of the local stub: it owns the planner,
+        # the confirmation state machine, and execution. None keeps the previous
+        # self-contained behavior. One backend conversation per voice session, so a
+        # multi-turn clarification survives and two clients cannot stomp each other.
+        self.lab_backend = lab_backend.LabBackend() if lab_backend.enabled() else None
 
     def add(self, role: str, content: str):
         self.history.append({"role": role, "content": content})
@@ -1247,9 +1264,35 @@ async def stream_llm(messages, out=None, tools_ctx=None):
             model=LLM_MODEL, max_tokens=LLM_MAXTOK,
             system=tools_ctx.system, messages=convo, tools=tools_ctx.tools,
         ) as stream:
-            async for chunk in stream.text_stream:
-                yield chunk
-            final = await stream.get_final_message()
+            if STRICT_GATE_AUDIO:
+                # STRUCTURAL confirmation-gate ordering. A pass that ends in a tool
+                # call has not been gated yet: the gate runs below, in handle(). Any
+                # text this pass produced is therefore PRE-GATE narration ("Okay,
+                # starting that now..."), and speaking it would tell the user an
+                # action is underway before the gate has decided whether it may
+                # happen at all. So hold the pass's text until stop_reason is known,
+                # and drop it entirely if a tool call is coming.
+                #
+                # Without this, the guarantee is only that the system prompt tells
+                # the model not to claim an action happened. That held in every
+                # probe (the model goes straight to the tool call and emits no
+                # preamble, which is also why this buffer usually holds nothing and
+                # costs nothing), but a demo that shows a hard safety stop should not
+                # rest on the model choosing to behave.
+                buffered = []
+                async for chunk in stream.text_stream:
+                    buffered.append(chunk)
+                final = await stream.get_final_message()
+                if final.stop_reason != "tool_use":
+                    for chunk in buffered:      # gated pass done: safe to speak
+                        yield chunk
+                elif buffered:
+                    print(f"[gate] suppressed {len(''.join(buffered))} chars of "
+                          f"pre-gate narration", flush=True)
+            else:
+                async for chunk in stream.text_stream:
+                    yield chunk
+                final = await stream.get_final_message()
         try:
             in_tokens += final.usage.input_tokens or 0
             out_tokens += final.usage.output_tokens or 0
@@ -1382,6 +1425,84 @@ async def _llm_producer(ws, queue: "asyncio.Queue", commit: dict, partial_chunks
     metrics = {"model": LLM_MODEL, "ttft_ms": ttft_ms, "ms": _ms(fired_at),
                "out_chars": len(text), "in_tokens": usage.get("in_tokens"),
                "out_tokens": usage.get("out_tokens")}
+    return text, metrics
+
+
+async def _backend_producer(ws, queue: "asyncio.Queue", commit: dict, partial_chunks: list,
+                           sess: "Session", asr_rec):
+    """The integration seam's producer: drive the Lab Agent API instead of Claude.
+
+    Same contract as `_llm_producer` (client messages, a queue of sentences for the
+    TTS consumer, a None sentinel last, returns (text, metrics)), so the consumer,
+    barge-in, and latency logging are all unchanged. The difference is where the
+    words come from: the Lab Agent owns the planner, the safety validation, the
+    confirmation state machine, and execution, and hands back one `reply` string.
+
+    The one thing this layer refuses to pass through is a confirmation it did not
+    hear clearly. When the backend is awaiting_confirmation, the next affirmative
+    starts a machine, so a low-confidence utterance is answered with a re-prompt
+    and NEVER forwarded. The backend cannot apply this check itself: by design it
+    trusts its transcript, and it has no idea the transcript came from a microphone
+    in a room with a centrifuge running.
+
+    There is no streaming here: the reply arrives whole. It is still split into
+    sentences and queued as it goes, so TTS starts on sentence 1 rather than
+    waiting for the full string to synthesize.
+    """
+    fired_at = commit["fired_at"]
+    user_text = commit.get("user_text") or ""
+    backend = sess.lab_backend
+    ttft_ms = None
+    text = ""
+    blocked = False
+    try:
+        prob_mean = _turn_prob_mean(asr_rec)
+        if lab_backend.blocks_confirmation(backend.state, prob_mean):
+            # Do not POST. The backend is armed and we are not sure what was said.
+            blocked = True
+            text = lab_backend.REPROMPT
+            await send(ws, type="action_rejected", intent="confirm",
+                       reason=f"low_confidence_confirmation prob_mean={prob_mean}")
+        else:
+            try:
+                data = await backend.send(user_text)
+            except lab_backend.LabBackendError as e:
+                text = ("I could not reach the lab agent, so nothing was run. "
+                        "Please try again.")
+                await send(ws, type="error", text=f"lab backend unreachable: {e}")
+            else:
+                ttft_ms = _ms(fired_at)
+                text = (data.get("reply") or "").strip()
+                # Give the UI the structured half of the turn: what the planner
+                # understood, what the validator said, and where the state machine
+                # now sits. The spoken reply is only the headline of all that.
+                await send(ws, type="lab_backend", **lab_backend.summary(data))
+
+        if not commit["event"].is_set():
+            await commit["event"].wait()
+        await send(ws, type="reply_start")
+        if text:
+            partial_chunks.append(text)
+            await send(ws, type="reply_delta", text=text)
+        await send(ws, type="reply_done", text=text)
+
+        if text:
+            if TTS_STREAM:
+                done, tail = split_sentences(text + " ")
+                for s in done:
+                    await queue.put(s)
+                tail = tail.strip()
+                if len(tail) >= 2:
+                    await queue.put(tail)
+            else:
+                await queue.put(text)
+    finally:
+        await queue.put(None)   # sentinel: the consumer must never hang
+    metrics = {"model": f"lab-agent:{backend.adapter}", "ttft_ms": ttft_ms,
+               "ms": _ms(fired_at), "out_chars": len(text),
+               "in_tokens": None, "out_tokens": None,
+               "backend_state": backend.state,
+               "blocked_confirmation": blocked}
     return text, metrics
 
 
@@ -1541,6 +1662,7 @@ def _gate_exempt(sess: Session, text: str) -> bool:
     the case where the user most needs to be heard.
       - while a lab command is pending, its spoken confirm (strict per the pending)
         or cancel: a quiet "confirm" must still commit the action.
+      - while the Lab Agent API is awaiting_confirmation, the same thing: see below.
       - a bare emergency stop that would actually halt something in flight. This
         mirrors the fast-path stop condition below (which runs after accumulation);
         exempting it here keeps a low-confidence stop from being gated before it
@@ -1548,6 +1670,17 @@ def _gate_exempt(sess: Session, text: str) -> bool:
     if sess.pending_action is not None and (
             lab_gate.is_confirm(text, strict=sess.pending_action.get("strict", False))
             or lab_gate.is_cancel(text)):
+        return True
+    # Same exemption for the integration seam. Without it, a mumbled "yes" while the
+    # backend is awaiting_confirmation is dropped HERE, as noise, and the user hears
+    # nothing back at all: they said yes, the room went silent, and they cannot tell
+    # whether the protocol is running. Being HEARD and being OBEYED are different
+    # things: let it through, and let the confirmation floor in _backend_producer
+    # refuse it out loud ("I did not catch that clearly enough to act on it"). It is
+    # still never forwarded to the backend, so a misheard yes still cannot execute.
+    if (sess.lab_backend is not None
+            and lab_backend.armed(sess.lab_backend.state)
+            and (lab_gate.is_confirm(text, strict=False) or lab_gate.is_cancel(text))):
         return True
     if LAB_MODE and lab_gate.is_stop(text) and (
             (sess.reply_task is not None and not sess.reply_task.done())
@@ -2107,6 +2240,15 @@ def _maybe_speculate(ws, sess: Session) -> None:
     assistant messages are added only on/after commit."""
     if not SPEC_START or llm_client is None:
         return
+    if sess.lab_backend is not None:
+        # NEVER speculate against the Lab Agent API. Speculation fires the reply at
+        # the SEGMENT boundary, before the user has finished the turn, and discards
+        # it if the turn keeps going. That is safe for a stateless LLM call and
+        # unsafe here: the backend is a state machine with an audit trail, so a
+        # discarded speculation would still have advanced idle -> gathering, logged
+        # a turn, and (worst case, when it was already awaiting_confirmation) taken a
+        # half-heard "yes" as sign-off. A lab turn is committed or it does not happen.
+        return
     if sess.pending_action is not None:
         return   # a confirm/cancel turn bypasses the LLM: speculating wastes a call
     if sess.turn_t0 is not None and (time.perf_counter() - sess.turn_t0) > SPEC_MAX_TURN_S:
@@ -2401,7 +2543,9 @@ async def handle_end_turn(ws, sess: Session):
     sess.asr_conf = []
     if not user_text:
         return
-    if llm_client is None:
+    if llm_client is None and sess.lab_backend is None:
+        # With the seam configured the Lab Agent owns the planner (and its own key),
+        # so the voice half needs no Anthropic key of its own to run a lab turn.
         await send(ws, type="error", text="no Anthropic API key configured")
         return
     sess.add("user", user_text)
@@ -2441,9 +2585,17 @@ async def _run_turn(ws, sess: Session, asr_rec, turn_t0, commit, tts_model, tts_
     # WS-aware but the seam (stream_llm) stays WS-agnostic. tools_ctx None restores
     # the exact pre-change reply flow.
     tools_ctx = _LabToolsCtx(ws, sess, commit, asr_rec) if (LAB_MODE and sess.lab_stub) else None
+    # The integration seam: when the Lab Agent API is configured it owns the turn
+    # (planner, validation, confirmation, execution) and the local tool gate stands
+    # down, so there is exactly one planner and one confirmation gate in the system.
+    producer = (
+        _backend_producer(ws, queue, commit, partial_chunks, sess, asr_rec)
+        if sess.lab_backend is not None
+        else _llm_producer(ws, queue, commit, partial_chunks, llm_messages, tools_ctx)
+    )
     try:
         prod_result, tts_result = await asyncio.gather(
-            _llm_producer(ws, queue, commit, partial_chunks, llm_messages, tools_ctx),
+            producer,
             _tts_consumer(ws, queue, commit, tts_model, tts_params),
             return_exceptions=True,
         )

@@ -1146,24 +1146,63 @@ setScenario('elisa');
   // Demo mode's promise is that it needs no backend and no network. This keeps that: the
   // synthesis call is the voice service on the same box, and if it is down, speak() fails
   // and the demo carries on silently rather than breaking.
+  // Pre-rendered demo audio. Demo mode's promise is "no backend, no API key, no network",
+  // and speaking its replies through the live TTS quietly broke that: the demo suddenly
+  // needed a GPU service to be up. These clips were rendered ahead of time by
+  // scripts/pregen_demo_audio.py, through the SAME pipeline a live reply takes (the same
+  // speakable rewrite, the same sentence split, the same voice and params), so the demo
+  // sounds like the system rather than like a recording of a different system.
+  //
+  // The map is INLINE, not fetched: a fetch() would reintroduce the network dependency,
+  // and would fail outright on file://, which is how her README says the demo can be
+  // opened. The <audio> element loads the mp3 itself, which works on file:// and http
+  // alike. Regenerate with: python3 scripts/pregen_demo_audio.py --force
+  const DEMO_CLIPS = {
+    'elisa:0':    'demo-audio/elisa-0.mp3',
+    'elisa:1':    'demo-audio/elisa-1.mp3',
+    'elisa:2':    'demo-audio/elisa-2.mp3',
+    'elisa:3':    'demo-audio/elisa-3.mp3',
+    'dilution:0': 'demo-audio/dilution-0.mp3',
+    'dilution:1': 'demo-audio/dilution-1.mp3',
+  };
+  let demoAudio = null;
+  function stopDemoClip(){
+    if (demoAudio){ demoAudio.pause(); demoAudio.src = ''; demoAudio = null; }
+  }
+  function playDemoClip(file){
+    stopDemoClip();                       // at most one utterance at a time, as in Live
+    demoAudio = new Audio(file);
+    demoAudio.play().catch(() => { /* autoplay blocked or file missing: stay silent */ });
+  }
+
   let speakReplies = loadSettings().speakReplies !== false;   // default ON
   const spkBtn = $('spk');
   function paintSpk(){ spkBtn.classList.toggle('on', speakReplies); }
   paintSpk();
   spkBtn.onclick = () => {
     speakReplies = !speakReplies;
-    if (!speakReplies) vw.cancelSpeak();     // stop mid-sentence, do not wait it out
+    if (!speakReplies){ vw.cancelSpeak(); stopDemoClip(); }   // stop mid-sentence, both paths
     paintSpk();
     saveSettings({ speakReplies });
   };
 
   applyTurn = function(t, adapterKey){
+    // Read the turn's identity BEFORE her code runs: demoNext() calls applyTurn(turns[S.step])
+    // and only then increments S.step, so this is the index of the turn being applied.
+    const demoKey = (S.mode === 'demo') ? (S.scenario + ':' + S.step) : null;
+
     _applyTurn(t, adapterKey);
     vw.setLabState(t.state);
-    // Speak whenever the toggle is on, in Demo and in Live alike. Guarded, so a page with
-    // no voice service still runs the console exactly as it did before.
+
     if (speakReplies && t && t.reply){
-      try { vw.speak(t.reply); } catch (e) { /* no voice service: stay silent, keep going */ }
+      const clip = demoKey && DEMO_CLIPS[demoKey];
+      if (clip){
+        playDemoClip(clip);           // pre-rendered: no backend, no network, no GPU
+      } else {
+        // Live, or a demo turn with no clip yet (a fixture added since the last
+        // pre-render). Speak it over the wire rather than going mute.
+        try { vw.speak(t.reply); } catch (e) { /* no voice service: stay silent, keep going */ }
+      }
     }
   };
 

@@ -1,0 +1,34 @@
+{
+ "voice": "nurisa",
+ "params": {
+  "temperature": 0.15,
+  "cfg_scale": 1.0,
+  "top_k": 0
+ },
+ "clips": {
+  "elisa:0": {
+   "file": "demo-audio/elisa-0.mp3",
+   "kb": 78.0
+  },
+  "elisa:1": {
+   "file": "demo-audio/elisa-1.mp3",
+   "kb": 153.9
+  },
+  "elisa:2": {
+   "file": "demo-audio/elisa-2.mp3",
+   "kb": 218.8
+  },
+  "elisa:3": {
+   "file": "demo-audio/elisa-3.mp3",
+   "kb": 124.5
+  },
+  "dilution:0": {
+   "file": "demo-audio/dilution-0.mp3",
+   "kb": 199.8
+  },
+  "dilution:1": {
+   "file": "demo-audio/dilution-1.mp3",
+   "kb": 150.7
+  }
+ }
+}

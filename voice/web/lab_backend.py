@@ -35,6 +35,7 @@ existing test and the no-backend demo path are unchanged.
 from __future__ import annotations
 
 import os
+import re
 
 import httpx
 
@@ -59,6 +60,82 @@ _ARMED_STATES = frozenset({"awaiting_confirmation"})
 # defaults to the same 0.40. Missing confidence (a degraded ASR, or the mock)
 # fails OPEN, matching the local gate: it must not lock out a legitimate confirm.
 CONFIRM_FLOOR = float(os.environ.get("LA_CONFIRM_FLOOR", "0.40"))
+
+
+# --------------------------------------------------------------------------- #
+# Speaking the backend's dialect.
+#
+# The Lab Agent parses slots out of the transcript with regexes written for TEXT a
+# person typed: `IL-?6` (so "IL6" or "IL-6"), and volumes as DIGITS ("100 microliters").
+# A speech recognizer does not write like that. Fun-ASR-Nano transcribes the spoken
+# "IL-6" as "IL 6", with a space, and the spoken "100" as the word "hundred".
+#
+# Measured, on the real stack: the backend then never filled the analyte slot, re-asked
+# "which analyte?" every turn, and the conversation DEADLOCKED before it could ever
+# reach a confirmation. The mock ASR hid this completely, because the test handed the
+# backend the exact string the test had typed.
+#
+# Canonicalizing the transcript is the speech half's job, not the planner's: the
+# planner should not have to know how an acoustic model spells things. So the seam
+# normalizes here, on the way out, and the backend keeps parsing clean text.
+_ANALYTE_SPACING = [
+    (re.compile(r"\bIL\s*[-\s]?\s*(\d)\b", re.I), r"IL-\1"),          # "IL 6"   -> "IL-6"
+    (re.compile(r"\bTNF\s*[-\s]?\s*alpha\b", re.I), "TNF-alpha"),     # "TNF alpha"
+]
+
+# Spoken numbers, for the ranges a protocol actually uses. ASR writes "hundred", the
+# backend's volume/count regexes want "100".
+_UNITS = {"zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+          "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+          "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16,
+          "seventeen": 17, "eighteen": 18, "nineteen": 19}
+_TENS = {"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60,
+         "seventy": 70, "eighty": 80, "ninety": 90}
+_NUM_WORD_RE = re.compile(
+    r"\b((?:one|two|three|four|five|six|seven|eight|nine)\s+hundred"
+    r"|hundred"
+    r"|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[-\s](?:one|two|three|four|five|six|seven|eight|nine))?"
+    r"|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen"
+    r"|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)\b", re.I)
+
+
+def _word_to_int(phrase: str) -> int | None:
+    p = phrase.lower().replace("-", " ").split()
+    if not p:
+        return None
+    if p[-1] == "hundred":                      # "hundred", "four hundred"
+        mult = _UNITS.get(p[0], 1) if len(p) > 1 else 1
+        return mult * 100
+    if p[0] in _TENS:                           # "fifty", "twenty four"
+        n = _TENS[p[0]]
+        if len(p) > 1 and p[1] in _UNITS:
+            n += _UNITS[p[1]]
+        return n
+    return _UNITS.get(p[0])
+
+
+def normalize_transcript(text: str) -> str:
+    """Rewrite an ASR transcript into the spelling the Lab Agent's parsers expect.
+
+    Deliberately narrow: analyte spacing and spoken numbers, the two that were
+    MEASURED to break the real conversation. It is not a general text normalizer, and
+    it must never change the meaning of an utterance: a confirmation stays a
+    confirmation, a cancel stays a cancel.
+    """
+    out = text
+    for rx, repl in _ANALYTE_SPACING:
+        out = rx.sub(repl, out)
+
+    def _sub_num(m):
+        n = _word_to_int(m.group(1))
+        return str(n) if n is not None else m.group(0)
+
+    # Only rewrite a number word when it actually quantifies something the backend
+    # parses (a volume or a count). "one more time" must not become "1 more time".
+    if re.search(r"\b(microliters?|microlitres?|ul|µl|samples?|wells?|points?|fold)\b",
+                 out, re.I):
+        out = _NUM_WORD_RE.sub(_sub_num, out)
+    return out
 
 
 def enabled() -> bool:
@@ -123,7 +200,7 @@ class LabBackend:
         The response's `reply` is what TTS speaks. `state`, `plan`, `workflow`,
         `validation` and `simulation_log` are what the UI renders.
         """
-        payload = {"transcript": transcript}
+        payload = {"transcript": normalize_transcript(transcript)}
         if self.session_id:
             payload["session_id"] = self.session_id
         try:

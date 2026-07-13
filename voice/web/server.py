@@ -364,6 +364,12 @@ llm_client = anthropic.AsyncAnthropic(api_key=_anthropic_key) if _anthropic_key 
 # public included, starts from DEFAULT_HINTS.
 HINTS_DIR = STATIC_DIR.parent / "data" / "hints"
 DEFAULT_HINTS = {"hotwords": ["Claude"], "replacements": {"cloud code": "Claude Code"}}
+# NOTE: seeding the lab vocabulary as hotwords here was TRIED and REVERTED. FunASR takes
+# hotwords as a decoding prompt, and a 14-term domain list did not bias the decode, it
+# derailed it: on the real stack a clean utterance came back as unrelated text ("the top
+# card on the top was for the sample photo...") and prob_mean collapsed from 0.91 to
+# 0.23. Hotwords are a scalpel (one or two terms), not a glossary. Domain vocabulary is
+# fixed AFTER recognition instead, in lab_backend.normalize_transcript.
 # scope -> its hints dict. transcribe() runs on EVERY VAD segment, so the hot path
 # must never stat/parse a file: a scope is read from disk (or defaulted) once, on
 # first use, and the entry is REPLACED on every set_hints, which is the only

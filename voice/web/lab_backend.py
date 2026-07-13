@@ -39,6 +39,15 @@ import re
 
 import httpx
 
+# lab_gate is import-free of this module (checked: no cycle), so this is a plain
+# top-level import; still guarded the way server.py guards its sibling imports,
+# since this module runs both as part of the `web` package and, in tests, via a
+# path-inserted script-style import (see voice/tests/test_lab_backend.py).
+try:
+    from web import lab_gate
+except ImportError:
+    import lab_gate
+
 # Where the Lab Agent API lives, e.g. "http://127.0.0.1:8000". Unset -> seam off.
 BACKEND_URL = os.environ.get("LA_LAB_BACKEND_URL", "").strip().rstrip("/")
 
@@ -57,8 +66,8 @@ _ARMED_STATES = frozenset({"awaiting_confirmation"})
 
 # ASR confidence floor for a confirmation-critical utterance. Reuses the same env
 # var as the local gate's execution floor so an operator tunes ONE number, and
-# defaults to the same 0.40. Missing confidence (a degraded ASR, or the mock)
-# fails OPEN, matching the local gate: it must not lock out a legitimate confirm.
+# defaults to the same 0.40. Missing confidence (a degraded decoder) now fails
+# CLOSED (blocks and re-prompts): see blocks_confirmation for the reasoning.
 CONFIRM_FLOOR = float(os.environ.get("LA_CONFIRM_FLOOR", "0.40"))
 
 
@@ -197,7 +206,8 @@ def armed(state: str | None) -> bool:
     return state in _ARMED_STATES
 
 
-def blocks_confirmation(state: str | None, prob_mean: float | None) -> bool:
+def blocks_confirmation(state: str | None, prob_mean: float | None,
+                         text: str | None = None) -> bool:
     """True when this utterance must NOT reach the backend.
 
     The backend is armed (its next affirmative executes), and ASR is not confident
@@ -207,15 +217,28 @@ def blocks_confirmation(state: str | None, prob_mean: float | None) -> bool:
     the calibration showed prob_min overlaps between speech and noise, so a single
     weak token in an otherwise clear "confirm" should not veto it.
 
-    prob_mean None means the ASR supplied no confidence at all. That fails OPEN
-    (returns False), deliberately: the mock and a degraded-but-working ASR both
-    report no confidence, and locking them out would break the demo and every
-    existing smoke. The floor only bites when we HAVE a number and it is low.
+    prob_mean None means the ASR supplied no confidence at all. That now fails
+    CLOSED (returns True, re-prompt): no acoustic evidence means a physical action
+    must not fire. This is the round-3 rule, matching the local gate's own
+    escalate-on-None behaviour (lab_gate.gate: missing confidence never relaxes).
+
+    The one exception is a CANCEL. Gating the whole armed turn (not just
+    affirmatives) means a naive fail-closed-on-None would also refuse "cancel",
+    and a degraded-ASR session would then be unescapable by voice: the user could
+    not confirm (refused) and could not cancel (refused), while the spoken
+    reprompt tells them to say one of the two. A cancel can only make the system
+    safer, so refusing one buys no safety and costs the user their only way out;
+    `text` is checked against the same is_cancel() the local gate uses, and a
+    cancel always passes through regardless of confidence.
     """
     if not armed(state):
         return False
-    if prob_mean is None or CONFIRM_FLOOR <= 0:
+    if CONFIRM_FLOOR <= 0:
         return False
+    if lab_gate.is_cancel(text):
+        return False
+    if prob_mean is None:
+        return True
     return prob_mean < CONFIRM_FLOOR
 
 

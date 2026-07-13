@@ -122,10 +122,51 @@ def test_floor_only_bites_when_the_backend_is_armed():
     assert lb.blocks_confirmation("awaiting_confirmation", 0.10) is True
 
 
-def test_floor_fails_open_when_the_asr_reports_no_confidence():
-    """A degraded ASR (and the mock) supply no confidence at all. Locking the user out
-    of confirming in that case would be a worse failure than the one being prevented."""
-    assert lb.blocks_confirmation("awaiting_confirmation", None) is False
+# SPEC CHANGE (round 3): missing confidence used to fail OPEN (not blocked). It now
+# fails CLOSED (blocked, re-prompt), matching the local gate's own escalate-on-None
+# rule: no acoustic evidence means a physical action must not fire. A misheard "yes"
+# on a degraded decoder must not be the thing that starts a machine just because the
+# decoder happened not to report a number at all. The old assertion below is WRONG
+# under the new rule and has been flipped; see the cancel-exemption tests right
+# after it for the reason this is safe (a degraded session still has a way out).
+def test_floor_fails_closed_when_the_asr_reports_no_confidence():
+    """A degraded ASR supplies no confidence at all. We have no acoustic evidence for
+    what was said, so the armed turn is refused and re-prompted rather than allowed
+    through. (Previously this asserted `is False`; that was the fail-open bug.)"""
+    assert lb.blocks_confirmation("awaiting_confirmation", None) is True
+
+
+def test_floor_none_still_lets_a_cancel_through():
+    """The trap: blocks_confirmation gates the WHOLE armed turn, not just
+    affirmatives. Failing closed on None must not ALSO refuse "cancel", or a
+    degraded-ASR session becomes unescapable by voice (can't confirm: refused;
+    can't cancel: refused; and the reprompt says to say one of the two)."""
+    assert lb.blocks_confirmation("awaiting_confirmation", None, text="cancel") is False
+    assert lb.blocks_confirmation("awaiting_confirmation", None, text="stop") is False
+    assert lb.blocks_confirmation("awaiting_confirmation", None, text="never mind") is False
+
+
+def test_floor_low_confidence_affirmative_is_blocked():
+    assert lb.blocks_confirmation("awaiting_confirmation", 0.10, text="yes") is True
+
+
+def test_floor_high_confidence_is_not_blocked():
+    assert lb.blocks_confirmation("awaiting_confirmation", 0.90, text="confirm") is False
+
+
+def test_floor_not_armed_with_no_confidence_is_unaffected():
+    """An ordinary (non-armed) turn is unaffected by the None-handling change: the
+    floor only ever bites when the backend is armed."""
+    assert lb.blocks_confirmation("gathering", None) is False
+    assert lb.blocks_confirmation(None, None) is False
+
+
+def test_floor_disabled_still_passes_none_through(monkeypatch):
+    """CONFIRM_FLOOR <= 0 means the operator turned the floor off entirely: even a
+    missing confidence must not block in that case, and neither does a low one."""
+    monkeypatch.setattr(lb, "CONFIRM_FLOOR", 0.0)
+    assert lb.blocks_confirmation("awaiting_confirmation", None, text="yes") is False
+    assert lb.blocks_confirmation("awaiting_confirmation", 0.01, text="yes") is False
 
 
 def test_real_speech_clears_the_floor():

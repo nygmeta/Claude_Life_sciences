@@ -12,37 +12,105 @@ The robot is on a lab LAN. The GPUs that do speech are not, and cannot be moved 
 
 **Audio crosses the network. The protocol does not.** The machine that will one day talk to the robot is the machine standing beside it. That happens to be both the only workable topology and the right security posture: a remote speech service never needs to know a robot exists, and never needs a route into the lab.
 
-## The one command
+## Step by step
 
-On the machine that sits on the robot's LAN, from a clone of this repo:
+Everything below happens on **the machine that sits on the robot's LAN**. Nothing needs to be installed on the GPU side.
+
+### Before you start
+
+- **Python 3.10 or newer.** On Debian or Ubuntu, `python3-venv` as well (`sudo apt install python3-venv`), because the stock Python there cannot create a virtualenv without it.
+- **An Anthropic API key.** The **planner runs on this machine**, so this machine needs its own key. The speech service holds a separate key for the verification turn; the two are not shared, and neither is ever committed.
+- **No GPU, no CUDA, no model download.** Speech is borrowed over a WebSocket.
+- **The speech host**, which the operator of the speech service will give you. It is a hostname, nothing more.
+
+### 1. Get the code
+
+```bash
+git clone <repo-url>
+cd <repo>
+git checkout voice-stack       # until the voice branch is merged to main
+```
+
+### 2. Give it the key
+
+Either export it:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+or write it to `voice/credentials/anthropic_key.txt`, which is gitignored:
+
+```bash
+mkdir -p voice/credentials
+printf '%s' 'sk-ant-...' > voice/credentials/anthropic_key.txt
+```
+
+The script looks in both places, environment first. If it finds neither it stops and says so, rather than starting and failing on the first spoken word.
+
+### 3. Start it
 
 ```bash
 bash voice/deploy/start-lab-console.sh --voice <voice-host>
 ```
 
-`<voice-host>` is the hostname of the speech service. It is remembered in `voice/credentials/console.env` (gitignored), so every run after the first is just:
+The first run takes a minute: it creates a virtualenv at `voice/venv-console` and installs four packages (`fastapi`, `uvicorn`, `pydantic`, `anthropic`). Then it starts the Lab Agent on `127.0.0.1:8000`, serves the console on `127.0.0.1:8090`, checks that the speech service is answering, and opens a browser.
+
+You should see:
+
+```
+==> speech service reachable at <voice-host>
+==> Lab Agent up on 127.0.0.1:8000 (planner, validator, adapters)
+==> console up on 127.0.0.1:8090
+
+    OPEN:  http://localhost:8090/console.html?voice=<voice-host>&api=http://localhost:8000
+```
+
+The speech host is remembered in `voice/credentials/console.env` (gitignored), so **every run after the first is just**:
 
 ```bash
 bash voice/deploy/start-lab-console.sh
 ```
 
-Stop it with `bash voice/deploy/stop-lab-console.sh`.
+### 4. Open the page
 
-What that script does, and deliberately does not do:
+Use the printed URL. Open it as **`localhost`, not as an IP address**: `localhost` is a secure context, so the microphone works with no HTTPS certificate on this machine, and `http://<lan-ip>` is not, so the mic will silently never start.
 
-- creates a virtualenv at `voice/venv-console` and installs four packages (`fastapi`, `uvicorn`, `pydantic`, `anthropic`),
-- starts the Lab Agent API on `127.0.0.1:8000` (loopback only: it has no authentication of its own, so nothing but this machine should be able to reach it),
-- serves the console on `127.0.0.1:8090`,
-- checks that the remote speech service is answering, and says so plainly if it is not,
-- opens the browser at a URL that already carries both parameters.
+Allow the microphone when the browser asks.
 
-It installs **no GPU dependency, no torch, and no speech model.** Speech is borrowed over a WebSocket. On a laptop this is a small install and a few seconds of startup.
+### 5. Check it is really wired up
 
-## What you need on that machine
+Two things tell you the split is working:
 
-- **Python 3.10 or newer.** On Debian or Ubuntu, `python3-venv` too (`sudo apt install python3-venv`), because the stock Python there cannot create a virtualenv without it.
-- **An Anthropic API key**, as `ANTHROPIC_API_KEY` in the environment or in `voice/credentials/anthropic_key.txt`. The **planner runs on this machine**, so this machine needs its own key. The speech service holds a separate key of its own for the verification turn; the two are not shared and neither is committed.
-- **No GPU.**
+- The **voice selector fills in** (roughly 19 voices). That list comes from the remote speech service, so if it populates, the WebSocket reached it. If it says "Loading voices..." forever, the page cannot reach the speech host.
+- **Switch to the Live tab** and the mic button becomes clickable. On the Demo tab it is deliberately greyed out, because Demo takes no input.
+
+### 6. Speak
+
+Click the mic and try the scripted path. The third line is the one worth watching, because the unsafe volume is refused out loud before anything is built:
+
+```
+"Run an ELISA on today's plasma samples."
+"IL-6, 24 samples, 400 microliters per well."     <- 400 is deliberately unsafe
+"Make it 100 microliters per well."
+"Yes, go ahead."
+```
+
+### 7. Stop it
+
+```bash
+bash voice/deploy/stop-lab-console.sh
+```
+
+It checks that the ports actually came free and tells you if something is still holding one, rather than printing "stopped" and leaving a process behind.
+
+## What the start script does, and deliberately does not do
+
+- creates a virtualenv and installs four pure-Python packages,
+- starts the Lab Agent API on loopback **only**: it has no authentication of its own, so nothing but this machine should be able to reach it,
+- serves the console as static files,
+- warns, but does not abort, if the speech service is unreachable, because the console is still usable by typing and Demo mode still speaks,
+- installs **no GPU dependency, no torch, and no speech model.**
 
 ## Why the URL has two parameters
 

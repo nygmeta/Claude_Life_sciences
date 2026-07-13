@@ -53,6 +53,14 @@ WS message contract (kept in sync with the handler below):
     ("low_confidence" | "degenerate") to `transcript`: present when the incoming
     segment was dropped as noise (shown to the user greyed, never accumulated into
     a turn, no reply). Absent on an accepted segment. See "noise gate" below.
+    Speech-service mode (`?mode=speech` on the connect URL) is PER-CONNECTION and
+    purely additive. It adds client -> server: set_lab_state {state}, speak
+    {text, voice?}, cancel_speak; and server -> client: transcript_final
+    {text, confidence} and transcript_refused {reason, prob_mean, reprompt}. In that
+    mode `end_turn` commits the turn WITHOUT any reply pipeline, so reply_start /
+    reply_delta / reply_done are never sent and audio comes only from `speak`. A
+    connection that does not ask for it is entirely unaffected. See
+    "speech-service mode" below.
 
 Identity + scope (multi-client isolation): a connection's identity is the `email`
 query param on the WS connect URL (`<ws base>/?email=<addr>`), lowercased + stripped.
@@ -88,6 +96,28 @@ cancelled turn: no reply_audio_end follows (unless the consumer already sent one
 before the cancel landed, which the client tolerates). A new end_turn arriving
 while a reply is still running supersedes it (same cancel + cleanup) so at most
 one reply task runs per session.
+
+Speech-service mode (`?mode=speech`): the orchestrator stops owning the turn and
+becomes a pure SPEECH I/O SERVICE for another app (a console that owns the
+conversation and the session). Mic -> ASR -> the SAFETY GATES still run here, and
+the accepted transcript is handed to that app instead of to an LLM; the app sends
+its reply text back as `speak` and we synthesize it. No LLM call and no Lab Agent
+call is ever made on this path.
+
+The gates are the entire reason the voice half exists, so they all still apply,
+and one of them is load-bearing: the CONFIRMATION FLOOR. The console tells us its
+backend's state with set_lab_state, and when that state is armed
+(lab_backend.armed, i.e. awaiting_confirmation) its next affirmative EXECUTES A
+PHYSICAL PROTOCOL. If ASR is not confident about what it heard, the transcript is
+NOT handed over at all (the console would POST it, and the backend would act on
+it): the turn is refused with transcript_refused, and we speak the reprompt
+ourselves so the user hears WHY nothing happened. Silence after saying "yes" is
+precisely the failure mode being avoided. A misheard "yes" must never be able to
+start a machine.
+
+Being HEARD and being OBEYED stay different things: while the console is armed, a
+low-confidence confirm/cancel is exempt from the noise gate (so it reaches
+end_turn and can be refused OUT LOUD) but is still never handed to the console.
 
 Speculative LLM start (LA_SPEC_START, default on): the reply's Claude call is
 fired at the SEGMENT boundary (end of handle_segment) instead of waiting for
@@ -505,6 +535,29 @@ def _read_client_email(ws):
         return None
     email = (values[0] or "").strip().lower()
     return email or None
+
+
+def _read_client_mode(ws):
+    """The `mode` query param on the WS connect URL (`<ws base>/?mode=speech`),
+    lowercased + stripped, or None when absent/blank. Same parse as the email above:
+    the connect URL is where a client declares what KIND of connection it wants, and
+    the choice is fixed for the life of the connection.
+
+    Only "speech" is meaningful (see speech_mode below). Anything else, including a
+    missing param, leaves the connection on the default conversational path, so this
+    is invisible to every existing client and every smoke."""
+    try:
+        path = ws.request.path
+    except Exception:  # noqa: BLE001  # no request/path (shouldn't happen post-handshake)
+        return None
+    try:
+        values = urllib.parse.parse_qs(urllib.parse.urlsplit(path or "").query).get("mode")
+    except Exception:  # noqa: BLE001
+        return None
+    if not values:
+        return None
+    mode = (values[0] or "").strip().lower()
+    return mode or None
 
 
 def _scope_for_email(email):
@@ -1026,7 +1079,8 @@ class Session:
                  "tts_model", "tts_params", "messages", "name", "started_at",
                  "reply_task", "reply_ctx", "spec_fired", "spec_discarded",
                  "scope", "owner_email", "is_operator", "pending_action", "lab_stub",
-                 "client_info", "cap_n", "captured", "lab_backend")
+                 "client_info", "cap_n", "captured", "lab_backend",
+                 "speech_mode", "lab_state", "speak_task")
 
     def __init__(self):
         self.history = []   # [{"role": "user"|"assistant", "content": str}, ...]
@@ -1093,6 +1147,23 @@ class Session:
         # self-contained behavior. One backend conversation per voice session, so a
         # multi-turn clarification survives and two clients cannot stomp each other.
         self.lab_backend = lab_backend.LabBackend() if lab_backend.enabled() else None
+        # Speech-service mode (?mode=speech). Like the scope, this belongs to the
+        # CONNECTION, not the conversation: it is stamped at connect and carried onto
+        # every new_session Session. False = the default conversational path, which is
+        # what every existing client gets.
+        self.speech_mode = False
+        # The CONSOLE's backend state, as of its last set_lab_state ("gathering",
+        # "awaiting_confirmation", "executed", ...). None until it tells us. This is
+        # what arms the confirmation floor in speech mode: it is the speech-mode
+        # counterpart of sess.lab_backend.state, and the only thing we know about a
+        # conversation we do not own. Physical/robot state, not conversation state, so
+        # it survives a new_session (like lab_stub).
+        self.lab_state = None
+        # The in-flight `speak` task (speech mode), or None. At most one at a time:
+        # a new speak supersedes the previous one, and cancel_speak (barge-in) drops
+        # it. Kept separate from reply_task, which is the LLM reply path this mode
+        # never uses.
+        self.speak_task = None
 
     def add(self, role: str, content: str):
         self.history.append({"role": role, "content": content})
@@ -1150,6 +1221,11 @@ def new_session_preserving(prev: Session) -> Session:
     nxt.tts_params = dict(prev.tts_params)
     nxt.lab_stub = prev.lab_stub   # physical lab state persists across a new conversation
     nxt.client_info = prev.client_info   # device metadata belongs to the connection, not the session
+    # Speech mode is a property of the CONNECTION (it was chosen on the connect URL),
+    # and the console's backend state is physical, not conversational: a new transcript
+    # does not un-arm a robot that is still awaiting confirmation.
+    nxt.speech_mode = prev.speech_mode
+    nxt.lab_state = prev.lab_state
     return nxt
 
 
@@ -1686,6 +1762,18 @@ def _gate_exempt(sess: Session, text: str) -> bool:
     # still never forwarded to the backend, so a misheard yes still cannot execute.
     if (sess.lab_backend is not None
             and lab_backend.armed(sess.lab_backend.state)
+            and (lab_gate.is_confirm(text, strict=False) or lab_gate.is_cancel(text))):
+        return True
+    # Speech mode: the SAME exemption, for the same reason, with the armed state
+    # coming from the console (set_lab_state) instead of from a backend we drive
+    # ourselves. Whoever owns the state machine, a confirm/cancel spoken while it is
+    # armed must never be silently swallowed as noise: it has to reach end_turn, so
+    # the confirmation floor can refuse it OUT LOUD (transcript_refused + a spoken
+    # reprompt) rather than leaving the user to wonder whether their "yes" started
+    # the protocol. Exempt from the NOISE gate, still refused by the CONFIRMATION
+    # floor: heard, not obeyed.
+    if (sess.speech_mode
+            and lab_backend.armed(sess.lab_state)
             and (lab_gate.is_confirm(text, strict=False) or lab_gate.is_cancel(text))):
         return True
     if LAB_MODE and lab_gate.is_stop(text) and (
@@ -2246,6 +2334,12 @@ def _maybe_speculate(ws, sess: Session) -> None:
     assistant messages are added only on/after commit."""
     if not SPEC_START or llm_client is None:
         return
+    if sess.speech_mode:
+        # NEVER speculate in speech mode. There is no reply for this server to
+        # generate: the console owns the conversation, and this is the one place a
+        # segment could otherwise still reach an LLM (speculation fires at the SEGMENT
+        # boundary, ahead of end_turn). A speech-mode turn must cost zero LLM calls.
+        return
     if sess.lab_backend is not None:
         # NEVER speculate against the Lab Agent API. Speculation fires the reply at
         # the SEGMENT boundary, before the user has finished the turn, and discards
@@ -2740,6 +2834,213 @@ def _abort_reply_task(sess: Session) -> None:
     sess.reply_ctx = None
 
 
+# ----------------------------------------------------------- speech-service mode
+# The inversion: this server stops owning the turn and becomes a microphone and a
+# speaker for a console that owns the conversation.
+#
+#   browser mic --audio--> [ASR + the safety gates] --accepted transcript--> console
+#   console --reply text--> [TTS] --audio--> browser speaker
+#
+# Everything above this line still runs on the way in: the noise gate, the addressed
+# -speech classifier, the segment accumulation. What changes is the way OUT: end_turn
+# runs NO reply pipeline (no LLM, no Lab Agent, no _run_turn), it just publishes the
+# turn's verdict, and audio is produced only when the console asks for it (`speak`).
+#
+# The confirmation floor is the reason this mode is not just "send the text". When
+# the console's backend is armed, its next affirmative fires a physical protocol, and
+# the console will POST whatever transcript we hand it. So a transcript we are not
+# confident about is NOT HANDED OVER AT ALL. That refusal has to be audible, or the
+# user's "yes" is met with silence and they cannot tell whether the machine started.
+async def handle_set_lab_state(ws, sess: Session, msg):
+    """The console tells us its backend's state string. This is the ONLY thing we
+    know about a conversation we do not own, and it is what arms the confirmation
+    floor (lab_backend.armed). Any string is accepted and an unknown one is simply
+    not armed: a console that reports a state we have never heard of must fail
+    SAFE-BY-DEFAULT-OPEN here (the floor does not bite), because the alternative is
+    refusing every turn on a state string typo. The floor's job is to be exactly
+    right about awaiting_confirmation, not to guess at the rest of a foreign state
+    machine."""
+    state = msg.get("state")
+    sess.lab_state = state if isinstance(state, str) and state.strip() else None
+    await send(ws, type="lab_state", state=sess.lab_state)
+
+
+async def _speak_producer(queue: "asyncio.Queue", text: str):
+    """Feed `text` to the TTS consumer one complete sentence at a time, so audio
+    starts on sentence 1 instead of after the whole reply is synthesized. The text
+    arrives whole (the console generated it), so there is nothing to stream: this is
+    the same split the Lab Agent producer does. Always queues the None sentinel last,
+    even on error, so the consumer can never hang."""
+    try:
+        done, tail = split_sentences(text + " ")
+        for s in done:
+            await queue.put(s)
+        tail = tail.strip()
+        if len(tail) >= 2:
+            await queue.put(tail)
+    finally:
+        await queue.put(None)
+
+
+async def _run_speak(ws, sess: Session, text: str, voice=None):
+    """Body of one `speak`: synthesize `text` through the EXISTING TTS path and
+    stream it as reply_audio chunks + a terminal reply_audio_end, exactly as an
+    assistant reply's audio has always been sent (the client's player is unchanged).
+    Runs as a background task so the receive loop stays free to read a cancel_speak
+    barge-in while the audio is still being generated.
+
+    `voice` (optional, per-call) overrides the session's voice for this utterance
+    only; unset falls through to the session's voice, and unset-with-the-default-
+    model falls through to DEF_VOICE inside _tts_consumer, same as everywhere else."""
+    queue: asyncio.Queue = asyncio.Queue()
+    # _tts_consumer is gated on a commit event and measures first-audio from
+    # t_perceived. There is no speculation here, so the turn is committed the moment
+    # it is asked for: set the gate and start the clock now.
+    commit = {"event": asyncio.Event(), "t_perceived": time.perf_counter()}
+    commit["event"].set()
+    model = sess.tts_model
+    params = dict(sess.tts_params)
+    if voice:
+        params["voice"] = voice
+    t0 = time.perf_counter()
+    _, tts_rec = await asyncio.gather(
+        _speak_producer(queue, text),
+        _tts_consumer(ws, queue, commit, model, params),
+        return_exceptions=True,
+    )
+    if isinstance(tts_rec, Exception):   # the consumer swallows synth errors, so this
+        log_event({"kind": "speak", "session": sess.sid,                 # is a real bug
+                   "status": f"error:{type(tts_rec).__name__}",
+                   "tts": {"ms": _ms(t0), "chars": len(text), "model": model}})
+        return
+    err = tts_rec.get("error")
+    log_event({"kind": "speak", "session": sess.sid,
+               "status": "ok" if not err else (f"ok_partial:{err}" if tts_rec.get("chunks")
+                                               else f"tts_error:{err}"),
+               "tts": tts_rec, "first_audio_ms": tts_rec.get("first_ms")})
+
+
+def _speak_task_done(sess: Session, task) -> None:
+    """Done-callback safety net for the fire-and-forget speak task: retrieve any
+    exception so it neither vanishes nor warns. A cancelled task IS awaited by the
+    cancel path, so skip it here (calling .exception() on it would raise)."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        print(f"[!] speak task sid={sess.sid} crashed: {exc!r}", flush=True)
+
+
+async def _cancel_speak_task(sess: Session) -> bool:
+    """Stop the in-flight `speak` (barge-in). Cancelling the gather cancels both the
+    producer and the TTS consumer, so no further reply_audio is sent; the client asked
+    for the stop, so there is no terminal message to send it. Returns False, sending
+    nothing, when nothing is speaking: cancel_speak is safe to call at any time."""
+    task = sess.speak_task
+    sess.speak_task = None
+    if task is None or task.done():
+        return False
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception:  # noqa: BLE001  # the task body already reported its own error
+        pass
+    return True
+
+
+async def _start_speak(ws, sess: Session, text: str, voice=None) -> None:
+    """Speak `text`, superseding anything already being spoken (at most one utterance
+    per session is ever in flight). Fire-and-forget on purpose: awaiting the synth
+    here would block the receive loop, and a cancel_speak that cannot be READ is not a
+    barge-in."""
+    if not text:
+        return
+    await _cancel_speak_task(sess)
+    sess.speak_task = asyncio.create_task(_run_speak(ws, sess, text, voice))
+    sess.speak_task.add_done_callback(lambda t: _speak_task_done(sess, t))
+
+
+async def handle_speak(ws, sess: Session, msg):
+    """The console hands us its reply text; we are its speaker. No LLM, no history:
+    we did not write these words and we are not part of the conversation they belong
+    to."""
+    text = (msg.get("text") or "").strip()
+    if not text:
+        return
+    voice = msg.get("voice")
+    await _start_speak(ws, sess, text, voice if isinstance(voice, str) and voice else None)
+
+
+def _abort_speak_task(sess: Session) -> None:
+    """Best-effort cancel with no client-facing cleanup, for teardown paths where the
+    socket is going away anyway (connection close, session switch). A no-op on every
+    non-speech connection, where speak_task is always None."""
+    task = sess.speak_task
+    if task is not None and not task.done():
+        task.cancel()
+    sess.speak_task = None
+
+
+async def handle_end_turn_speech(ws, sess: Session):
+    """Commit the turn WITHOUT replying to it: assemble the accumulated segments,
+    apply the gates, and answer with exactly one of transcript_final (the console may
+    POST this) or transcript_refused (the console must NOT).
+
+    This is the whole safety argument of speech mode, so it is worth being explicit
+    about what each branch means:
+
+      transcript_final   we heard this clearly enough that the console may act on it.
+                         The text is NORMALIZED first (lab_backend.normalize_transcript):
+                         the console's backend parses slots with regexes written for
+                         TYPED text ("IL-6", digits), and a real recognizer writes
+                         "IL 6" and "hundred". Measured on the real stack: without
+                         this the backend never fills the analyte slot, re-asks the
+                         same question every turn, and the conversation DEADLOCKS
+                         before it can ever reach a confirmation.
+      transcript_refused we heard something, but the console's backend is armed and
+                         we are not confident enough about WHAT we heard. Handing this
+                         over would let a misheard "yes" start a machine, so it is not
+                         handed over at all. We also SPEAK the reprompt, because the
+                         user needs to hear why nothing happened: silence after saying
+                         "yes" is the exact failure this mode exists to prevent.
+
+    A missing confidence block fails OPEN (accepted), matching every other floor in
+    this file: the mock and a degraded-but-working ASR supply no confidence, and must
+    not be locked out of confirming (see lab_backend.blocks_confirmation).
+
+    NO reply pipeline runs here: no LLM, no Lab Agent, no _run_turn, no history. The
+    console owns all of that."""
+    user_text = " ".join(s for s in sess.pending if s).strip()
+    asr_ms_list = list(sess.asr_ms)
+    asr_conf_list = list(sess.asr_conf)
+    sess.pending = []
+    sess.asr_ms = []
+    sess.asr_conf = []
+    if not user_text:
+        return
+    asr_rec = _asr_rec(asr_ms_list, asr_conf_list, user_text)
+    prob_mean = _turn_prob_mean(asr_rec)
+    prob_min = _turn_prob_min(asr_rec)
+
+    if lab_backend.blocks_confirmation(sess.lab_state, prob_mean):
+        await send(ws, type="transcript_refused", reason="low_confidence_confirmation",
+                   prob_mean=prob_mean, reprompt=lab_backend.REPROMPT)
+        await _start_speak(ws, sess, lab_backend.REPROMPT)   # say it out loud, not just on screen
+        log_event({"kind": "speech_turn", "session": sess.sid, "turn": sess.seq,
+                   "status": "refused", "reason": "low_confidence_confirmation",
+                   "lab_state": sess.lab_state, "asr": asr_rec})
+        return
+
+    text = lab_backend.normalize_transcript(user_text)
+    await send(ws, type="transcript_final", text=text,
+               confidence={"prob_mean": prob_mean, "prob_min": prob_min})
+    log_event({"kind": "speech_turn", "session": sess.sid, "turn": sess.seq,
+               "status": "accepted", "lab_state": sess.lab_state, "asr": asr_rec,
+               "normalized": text != user_text})
+
+
 # --------------------------------------------------------------- event channel
 # Live connections (Phase 3). A Conn wraps one WS + its CURRENT session (which is
 # reassigned on new_session) + a per-connection AnnounceManager. The registry lets
@@ -3000,13 +3301,19 @@ async def handler(ws):
             await ws.close(code=4001, reason="auth failed")
             return
     conn_scope, conn_owner, conn_is_op = _scope_for_email(email)
+    # Speech-service mode is chosen on the connect URL (`?mode=speech`) and is fixed
+    # for the life of the connection, like the scope. Anything else (including no
+    # param at all) is the default conversational path, unchanged.
+    speech_mode = _read_client_mode(ws) == "speech"
     sess = _apply_scope(Session(), conn_scope, conn_owner, conn_is_op)
+    sess.speech_mode = speech_mode
     # Register this connection so operator broadcasts and stub completion timers can
     # reach it (Phase 3). conn.sess tracks the CURRENT session across new_session.
     conn = Conn(ws, sess)
     LIVE_CONNS.add(conn)
     peer = getattr(ws, "remote_address", ("?",))[0]
-    print(f"[+] client {peer} scope={conn_scope}{' operator' if conn_is_op else ''}", flush=True)
+    print(f"[+] client {peer} scope={conn_scope}{' operator' if conn_is_op else ''}"
+          f"{' speech-service' if speech_mode else ''}", flush=True)
     ready = llm_client is not None
     await send(ws, type="status",
                text="Ready. Click start and speak." if ready else "No API key configured.")
@@ -3041,7 +3348,22 @@ async def handler(ws):
                     continue
                 await handle_segment(ws, sess, pcm)
             elif mtype == "end_turn":
-                await handle_end_turn(ws, sess)
+                # The fork. In speech mode the turn is COMMITTED but never REPLIED to:
+                # the accepted transcript goes to the console, which owns the
+                # conversation, so no reply pipeline runs here at all.
+                if sess.speech_mode:
+                    await handle_end_turn_speech(ws, sess)
+                else:
+                    await handle_end_turn(ws, sess)
+            # The speech-service messages. Each is gated on the connection having
+            # asked for speech mode, so on any other connection they stay exactly what
+            # they were before this feature existed: unknown types, silently ignored.
+            elif mtype == "set_lab_state" and sess.speech_mode:
+                await handle_set_lab_state(ws, sess, msg)
+            elif mtype == "speak" and sess.speech_mode:
+                await handle_speak(ws, sess, msg)
+            elif mtype == "cancel_speak" and sess.speech_mode:
+                await _cancel_speak_task(sess)   # barge-in; a no-op when nothing is speaking
             elif mtype == "cancel_turn":
                 # barge-in: user started talking over the reply. Cancel the
                 # in-flight reply task and send the terminal reply_cancelled;
@@ -3084,6 +3406,7 @@ async def handler(ws):
                 # user preference, so the client's controls stay in sync without a
                 # tts_params re-emit and the contract is unchanged.
                 _abort_reply_task(sess)   # drop any reply still running on the old session
+                _abort_speak_task(sess)   # ... and any speech-mode audio still going out
                 # the outgoing session just ended: let Claude title it (when the
                 # user never did) BEFORE we let go of it, and push session_renamed
                 # with the OLD sid so an open History panel updates the row live.
@@ -3111,6 +3434,7 @@ async def handler(ws):
         conn.close()
         sess.lab_stub.cancel_timers()
         _abort_reply_task(sess)   # don't leave a turn task sending on a closed socket
+        _abort_speak_task(sess)   # ... nor a speech-mode synth
         # the connection dropped == the session ended: title it if the user never
         # did. This runs after _abort_reply_task, and any earlier barge-in already
         # committed its partial assistant text via _cancel_reply_task, so whatever

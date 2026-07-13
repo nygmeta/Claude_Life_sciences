@@ -83,9 +83,30 @@ CONFIRM_FLOOR = float(os.environ.get("LA_CONFIRM_FLOOR", "0.40"))
 # "IL-6": "IL 6", "I L 6", "I L 6." Anything that does not collapse back to IL-6 leaves
 # the analyte slot empty, and the backend then re-asks "which analyte?" forever. So match
 # the letters with optional spaces and periods BETWEEN them, not just around them.
+# The digit may arrive as a WORD. Measured live: a scientist saying "IL-6" produced
+# "I L SIX", "i l six", and "i am six". Nothing here matched, the analyte slot stayed
+# empty, and the Lab Agent re-asked "which analyte?" forever.
+_ANALYTE_NUM = r"(?:6|six|8|eight)"
+_NUM_WORD = {"six": "6", "eight": "8", "6": "6", "8": "8"}
+
+# What the recognizer actually writes when a person SPELLS "eye ell". It is two vowel-ish
+# letter names with no lexical anchor, so the model reaches for the nearest English words.
+# Each of these is only rewritten when a 6 or an 8 follows IMMEDIATELY, which is what keeps
+# the rule from touching ordinary prose: "I am six" alone is left alone; "I am six" as the
+# answer to "which analyte?" is IL-6, and that is the only place this runs.
+_IL_HEARD = r"(?:I\s*\.?\s*L|IL|I'?ll|I\s+am|aisle|isle|ill|eel|eyel)"
+
+
+def _il(m: "re.Match") -> str:
+    return "IL-" + _NUM_WORD[m.group(1).lower()]
+
+
 _ANALYTE_SPACING = [
-    # "I L 6", "I.L. 6", "IL 6", "IL-6" -> "IL-6"   (same for IL-8)
-    (re.compile(r"\bI\s*\.?\s*L\s*\.?\s*[-\s]?\s*(\d)\b", re.I), r"IL-\1"),
+    # "interleukin 6" / "interleukin six" -> "IL-6". Worth having FIRST: it is the form a
+    # human can say and a recognizer can actually get right, unlike two spelled letters.
+    (re.compile(rf"\binterleukin\s*[-\s]?\s*({_ANALYTE_NUM})\b", re.I), _il),
+    # "I L 6", "I L SIX", "I.L. six", "IL 6", "IL-6", and the mishears above -> "IL-6"
+    (re.compile(rf"\b{_IL_HEARD}\s*[-\s.]?\s*({_ANALYTE_NUM})\b", re.I), _il),
     # "T N F alpha", "TNF alpha" -> "TNF-alpha"
     (re.compile(r"\bT\s*\.?\s*N\s*\.?\s*F\s*\.?\s*[-\s]?\s*alpha\b", re.I), "TNF-alpha"),
     # "C R P" -> "CRP", "T N F" -> "TNF" (bare, no alpha)

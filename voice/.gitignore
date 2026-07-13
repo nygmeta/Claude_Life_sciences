@@ -1,0 +1,23 @@
+# Secrets, never commit
+credentials/
+
+# Runtime / build artifacts
+*.log
+*.pid
+__pycache__/
+*.pyc
+data/
+logs/
+*.wav
+out.wav
+
+# Files moved aside instead of deleted (the smoke suite parks its captures here).
+# May hold session audio, so it must never be committed.
+deprecated/
+
+# Disposable one-off scripts (leading underscore convention)
+_*
+
+# Model caches / venvs if ever created locally
+hf-cache/
+venv-*/

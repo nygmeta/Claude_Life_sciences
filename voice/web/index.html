@@ -1,0 +1,2203 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>lab-assistant</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@100;300;400&family=Roboto+Condensed:wght@300;400;500&display=swap">
+<style>
+  /* ---- mono: brutalist editorial. flat ground, ink rules, zero radius, no shadow, no accent ---- */
+  /* Theming: one semantic palette, two value sets keyed off :root[data-theme]. All colored
+     surfaces reference the variables below, so a theme swap is purely the attribute flip. */
+  :root{
+    --font-nh:'Inter','Helvetica Neue',Helvetica,Arial,system-ui,sans-serif;
+    --font-cond:'Roboto Condensed','Arial Narrow','Helvetica Neue',Arial,sans-serif;
+    /* theme-toggle sun outline: one neutral gray that reads on white AND black button grounds,
+       so both halves stay delineated in either theme (and on the inverted hover ground). */
+    --sun-edge:#808080;
+  }
+  /* dark palette (default fallback when no stored choice and no OS light preference) */
+  :root, :root[data-theme="dark"]{
+    --bg:#0f0f0f;              /* page ground */
+    --surface:#0f0f0f;         /* header, panels, footer, message column */
+    --text:#f2f2f2;            /* primary ink */
+    --muted:rgba(242,242,242,.55);   /* captions, status, placeholders */
+    --border:#d8d8d8;          /* 2px rules */
+    --hairline:rgba(242,242,242,.14);/* faint dividers */
+    --accent:#f2f2f2;          /* mono: accent == text (DESIGN specifies no accent color) */
+    --btn-fg:#f2f2f2;          /* outline button text */
+    --btn-bg-active:#f2f2f2;   /* filled button (hover / open / primary) bg */
+    --btn-fg-active:#0f0f0f;   /* filled button fg */
+    --input-bg:#0f0f0f;        /* text field / select ground */
+    --input-fg:#f2f2f2;        /* text field / select ink */
+    --input-placeholder:rgba(242,242,242,.55);
+    --bubble-user-fg:#f2f2f2;  /* user role chip (plain) */
+    --bubble-asst-bg:#f2f2f2;  /* assistant role chip (inverse) bg */
+    --bubble-asst-fg:#0f0f0f;  /* assistant role chip fg */
+    --netdot-border:#d8d8d8;   /* connection dot outline */
+    --netdot-on:#f2f2f2;       /* connection dot filled (connected) */
+    --netdot-blink:#0f0f0f;    /* connection dot blink (speaking): flashes to ground */
+    --sun-left:#f4f4f4;        /* dark theme: sun left half white ... */
+    --sun-right:#151515;       /* ... right half black (flips vs light) */
+    color-scheme:dark;
+  }
+  /* light palette (the original white-paper mono design, preserved exactly) */
+  :root[data-theme="light"]{
+    --bg:#ffffff;
+    --surface:#ffffff;
+    --text:#292929;
+    --muted:rgba(41,41,41,.55);
+    --border:#292929;
+    --hairline:rgba(41,41,41,.12);
+    --accent:#292929;
+    --btn-fg:#292929;
+    --btn-bg-active:#292929;
+    --btn-fg-active:#ffffff;
+    --input-bg:#ffffff;
+    --input-fg:#000000;
+    --input-placeholder:rgba(41,41,41,.55);
+    --bubble-user-fg:#292929;
+    --bubble-asst-bg:#292929;
+    --bubble-asst-fg:#ffffff;
+    --netdot-border:#292929;
+    --netdot-on:#292929;
+    --netdot-blink:#ffffff;
+    --sun-left:#151515;        /* light theme: sun left half black ... */
+    --sun-right:#f4f4f4;       /* ... right half white (flips vs dark) */
+    color-scheme:light;
+  }
+  *{ box-sizing:border-box; }
+  [hidden]{ display:none !important; }
+  html,body{ height:100%; }
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:var(--font-nh); font-weight:400; font-size:16px; line-height:1.34; letter-spacing:-0.02em;
+    height:100vh; display:flex; flex-direction:column; -webkit-font-smoothing:antialiased;
+  }
+  :focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+
+  /* label + caption utility faces (S-Condensed, always uppercase, wide tracking) */
+  .label{ font-family:var(--font-cond); text-transform:uppercase; font-weight:500; font-size:12px; letter-spacing:0.1em; line-height:1.34; color:var(--text); }
+  .cap{ font-family:var(--font-cond); text-transform:uppercase; font-weight:400; font-size:12px; letter-spacing:0.12em; color:var(--muted); }
+
+  /* ---- masthead ---- */
+  header{
+    display:flex; align-items:center; gap:20px; padding:20px; flex-wrap:wrap;
+    border-bottom:2px solid var(--border); background:var(--surface);
+  }
+  .brand{ font-family:var(--font-cond); text-transform:uppercase; font-weight:500; font-size:14px; letter-spacing:0.2em; }
+  /* title + Start + theme toggle read as one left cluster; the auto margin sits on the cluster now */
+  .brandcluster{ display:flex; align-items:center; gap:16px; margin-right:auto; }
+  .stat{ display:flex; align-items:center; gap:8px; }
+  .sq{ width:9px; height:9px; border:2px solid var(--netdot-border); background:transparent; }
+  .sq.on{ background:var(--netdot-on); }
+  .sq.speak{ animation:blink .8s steps(1) infinite; }
+  @keyframes blink{ 50%{ background:var(--netdot-blink); } }
+  #status,#vadpill{ font-family:var(--font-cond); text-transform:uppercase; font-size:12px; letter-spacing:0.12em; color:var(--muted); }
+  #vadpill{ min-width:92px; }
+  /* Reserve a stable footprint for the connection status so its text changing (e.g. "connecting…"
+     vs "disconnected, reconnecting…") never reflows the wrapping header or shifts the button row.
+     min-width holds that footprint for the routine states; a long one-off message (a mic or audio
+     setup error, which the user has to be able to read in full on a phone) wraps and grows instead
+     of being ellipsized away. */
+  #status{ flex:0 1 auto; min-width:210px; max-width:100%; white-space:normal; overflow-wrap:anywhere; }
+  /* the five action buttons stay one intact row (same 20px gap the header uses);
+     the group may wrap to a second line as a unit but never fragments. min-width:0
+     lets flex shrink it, overflow-x:auto scrolls on ultra-narrow phones. */
+  .headbtns{ display:flex; flex-wrap:nowrap; gap:20px; min-width:0; overflow-x:auto; }
+  /* signed-in-as caption + sign-out button, small, sit in the left brand cluster near the theme toggle */
+  #authWho{ max-width:22ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  /* ---- email gate overlay: the front door before the app ---- */
+  /* Opaque full-screen cover (its own ground) so an un-authed load never flashes the app behind it.
+     Brutalist card, theme variables only, both themes. Shown until a successful connect. */
+  #authGate{ position:fixed; inset:0; z-index:1000; display:flex; align-items:center; justify-content:center; padding:24px; background:var(--bg); }
+  .authcard{ width:100%; max-width:360px; border:2px solid var(--border); background:var(--surface); padding:28px 24px; display:flex; flex-direction:column; gap:18px; }
+  .auth-title{ font-family:var(--font-cond); text-transform:uppercase; font-weight:500; font-size:14px; letter-spacing:0.2em; }
+  .auth-sub{ font-family:var(--font-nh); font-size:14px; line-height:1.4; color:var(--muted); }
+  .authcard input{ width:100%; border:0; border-bottom:2px solid var(--border); border-radius:0; padding:8px 0;
+                   background:var(--input-bg); color:var(--input-fg); font-family:var(--font-nh); font-size:16px; letter-spacing:-0.02em; }
+  .authcard input::placeholder{ color:var(--input-placeholder); }
+  #authError{ min-height:1.2em; font-family:var(--font-nh); font-size:13px; line-height:1.3; color:var(--text); }
+  .auth-actions{ display:flex; align-items:center; gap:16px; }
+
+  /* ---- buttons: outline (nav) + inverse (primary) ---- */
+  .btn{
+    font-family:var(--font-cond); text-transform:uppercase; font-weight:500; font-size:12px; letter-spacing:0.1em;
+    background:transparent; color:var(--btn-fg); border:2px solid var(--border); border-radius:0;
+    padding:9px 20px; cursor:pointer; line-height:1;
+    transition:background .3s cubic-bezier(.455,.03,.515,.955), color .3s cubic-bezier(.455,.03,.515,.955);
+  }
+  .btn:hover{ background:var(--btn-bg-active); color:var(--btn-fg-active); }
+  .btn.on{ background:var(--btn-bg-active); color:var(--btn-fg-active); }              /* panel is open */
+  .btn.primary{ background:var(--btn-bg-active); color:var(--btn-fg-active); }
+  .btn.primary:hover{ background:var(--surface); color:var(--btn-fg); }
+  .btn.primary.live{ background:var(--surface); color:var(--btn-fg); }    /* listening -> "Stop" reads as outline */
+  .btn:disabled{ opacity:.3; cursor:not-allowed; }
+  .btn:disabled:hover{ background:transparent; color:var(--btn-fg); }
+  /* theme toggle: split black/white sun icon, rendered as a BARE icon (no button box).
+     Left/right halves read from --sun-left / --sun-right, which the light and dark blocks swap,
+     so flipping data-theme also flips which side is black. The two clipped fill layers draw each
+     half; the third layer strokes the outline in a neutral gray (--sun-edge) so both halves and the
+     rays stay legible sitting directly on the header ground in either theme.
+     These #themeToggle rules override the shared .btn chrome (border/background/padding/hover-invert)
+     by id specificity; the element stays a real <button> for the aria-label + onclick wiring. */
+  #themeToggle{
+    border:0; background:transparent; box-shadow:none;
+    padding:4px; margin:0; display:inline-flex; align-items:center; justify-content:center;
+    line-height:0; cursor:pointer;
+    transition:opacity .2s ease, transform .2s ease;
+  }
+  #themeToggle:hover{ background:transparent; color:var(--btn-fg); opacity:.55; }   /* affordance, not a box */
+  #themeToggle:focus-visible{ outline:2px solid var(--border); outline-offset:2px; }  /* keyboard focus indicator */
+  #themeToggle .sun{ display:block; }
+  .sun-l{ fill:var(--sun-left); clip-path:url(#sunClipL); }
+  .sun-r{ fill:var(--sun-right); clip-path:url(#sunClipR); }
+  .sun-edge{ fill:none; stroke:var(--sun-edge); stroke-width:1; stroke-linejoin:round; }
+
+  /* ---- config panels: bordered cells ---- */
+  .panel{ border-bottom:2px solid var(--border); background:var(--surface); padding:20px; display:flex; flex-direction:column; gap:20px; }
+  .field{ display:flex; flex-direction:column; gap:8px; }
+  .row{ display:flex; flex-wrap:wrap; gap:23px; align-items:flex-end; }
+  textarea{
+    width:100%; resize:vertical; border:2px solid var(--border); border-radius:0; padding:12px;
+    background:var(--input-bg); color:var(--input-fg);
+    font-family:var(--font-nh); font-size:15px; line-height:1.45; letter-spacing:-0.01em;
+  }
+  textarea::placeholder{ color:var(--input-placeholder); }
+  .uinput{ display:flex; flex-direction:column; gap:8px; }
+  .uinput input,.uinput select{
+    border:0; border-bottom:2px solid var(--border); border-radius:0; padding:6px 0; background:var(--input-bg); color:var(--input-fg);
+    font-family:var(--font-nh); font-size:16px; letter-spacing:-0.02em;
+  }
+  .uinput select{ appearance:none; -webkit-appearance:none; padding-right:18px; min-width:120px; cursor:pointer; }
+  .uinput input[type=number]{ width:76px; }
+  #pgAudio{ width:100%; filter:grayscale(1); }
+
+  /* ---- conversation: editorial transcript, role chip + measured body ---- */
+  /* #transcriptArea holds the banner + whichever of #chat/#historyChat is visible; it is the
+     flex:1 child #chat used to be directly, so #workspace's row/column split is unchanged. */
+  #transcriptArea{ flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; }
+  main#chat, main#historyChat{ flex:1; min-width:0; min-height:0; overflow-y:auto; display:flex; flex-direction:column; background:var(--bg); }
+  .msg{ padding:23px 20px; border-top:2px solid var(--border); }
+  .msg:first-child{ border-top:0; }
+  .mtag{ font-family:var(--font-cond); text-transform:uppercase; font-weight:500; font-size:12px; letter-spacing:0.2em; width:max-content; }
+  .msg.user .mtag{ color:var(--bubble-user-fg); }
+  .msg.asst .mtag{ color:var(--bubble-asst-fg); background:var(--bubble-asst-bg); padding:3px 8px; }
+  .msg.asst.speaking .mtag::after{ content:" · Speaking"; }
+  .mbody{ margin-top:10px; max-width:72ch; font-family:var(--font-nh); font-weight:400; font-size:18px; line-height:1.5; letter-spacing:-0.02em; white-space:pre-wrap; word-break:break-word; }
+  .empty{ padding:50px 20px; max-width:30ch; font-family:var(--font-nh); font-weight:300; font-size:25px; line-height:1.27; letter-spacing:-0.5px; color:var(--muted); }
+
+  /* ---- capture mode: per-segment labeling (debug affordance, capture-on only) ---- */
+  /* Subordinate to the transcript itself: a hairline-bordered flag button that reveals three
+     choices, plus a muted applied tag. Every hit target is >= 32px and nothing is hover-only,
+     so it is usable by thumb on a phone. Absent entirely when capture is off. */
+  .seglbl{ margin-top:12px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .seg-flag{ min-width:32px; min-height:32px; padding:0 8px; display:inline-flex; align-items:center; justify-content:center;
+             border:2px solid var(--hairline); border-radius:0; background:transparent; color:var(--muted); font-size:14px; line-height:1; cursor:pointer; }
+  .seg-flag:hover, .seg-flag.on{ border-color:var(--border); color:var(--text); }
+  .seg-menu{ display:flex; gap:8px; flex-wrap:wrap; }
+  .seg-menu button{ min-height:32px; padding:0 10px; border:2px solid var(--border); border-radius:0; background:transparent; color:var(--btn-fg);
+                    font-family:var(--font-cond); text-transform:uppercase; font-weight:500; font-size:11px; letter-spacing:0.1em; line-height:1; cursor:pointer; }
+  .seg-menu button:hover, .seg-menu button.sel{ background:var(--btn-bg-active); color:var(--btn-fg-active); }
+  .seg-tag{ font-family:var(--font-cond); text-transform:none; font-size:11px; letter-spacing:0.08em; color:var(--muted); }
+  .seg-tag.pending{ opacity:.5; }   /* sent, not yet acknowledged by the server */
+
+  /* ---- capture mode: per-segment chip strip under an aggregated turn row ---- */
+  /* One numbered chip per segment of the turn; tapping a chip opens the same three-label menu for
+     that segment's own id, so the transcript stays one-line-per-turn while every recording is still
+     individually labelable. Each chip is a >= 32px tap target; the menu drops below its chip. */
+  .chipstrip{ margin-top:12px; display:flex; gap:8px; flex-wrap:wrap; align-items:flex-start; }
+  .chipwrap{ display:flex; flex-direction:column; gap:6px; }
+  .seg-chip{ min-width:32px; min-height:32px; padding:0 9px; display:inline-flex; align-items:center; justify-content:center;
+             border:2px solid var(--hairline); border-radius:0; background:transparent; color:var(--muted);
+             font-family:var(--font-cond); text-transform:none; font-size:12px; letter-spacing:0.04em; line-height:1; cursor:pointer; white-space:nowrap; }
+  .seg-chip:hover, .seg-chip.on, .seg-chip.labeled{ border-color:var(--border); color:var(--text); }
+  .seg-chip.pending{ opacity:.55; }   /* label sent, not yet acknowledged */
+
+  /* ---- gate-discarded / side-speech segments: one compact, expandable aggregate row ---- */
+  /* Consecutive drops (noise-gate rejections / side speech) collapse into ONE small muted line so
+     they never dominate the transcript between real turns. The summary is the tap target (a
+     disclosure); the details list is collapsed by default and holds a compact mini-row per segment.
+     Small font, tight padding, no role chip, muted via theme variables (both themes). */
+  .msg.drop-run{ padding:6px 20px; }
+  .drop-summary{ display:inline-flex; align-items:center; gap:8px; min-height:32px; padding:0; margin:0;
+                 border:0; background:transparent; color:var(--muted); cursor:pointer; text-align:left;
+                 font-family:var(--font-cond); text-transform:none; font-size:12px; letter-spacing:0.02em; line-height:1.2; }
+  .drop-summary:hover{ color:var(--text); }
+  .drop-caret{ font-size:9px; line-height:1; }
+  .drop-details{ margin-top:6px; display:flex; flex-direction:column; gap:8px; }
+  .drop-item{ display:flex; align-items:flex-start; gap:8px; flex-wrap:wrap; font-size:13px; line-height:1.35; color:var(--muted); }
+  .drop-item-text{ max-width:72ch; overflow-wrap:anywhere; }
+  .drop-item .seglbl{ margin-top:0; }   /* the flag control sits inline in a compact mini-row, not spaced like a full turn */
+
+  /* ---- lab action events: a third transcript style, neither user nor assistant bubble ----
+     A labeled annotation line in the condensed label face: a bracketed chip (state) + full-width
+     body + optional quiet hint. All colors reference the theme variables so it reads in both palettes.
+     .strong is the strongest treatment (hazardous pending, halted): an inverse (filled) chip. */
+  .msg.event{ padding:18px 20px; border-top:2px solid var(--border); }
+  .msg.event.pending, .msg.event.halted, .msg.event.alert{ border-left:4px solid var(--border); background:var(--hairline); }
+  .evchip{ display:inline-block; font-family:var(--font-cond); text-transform:uppercase; font-weight:500; font-size:12px; letter-spacing:0.2em; padding:3px 8px; border:2px solid var(--border); color:var(--text); }
+  .evchip.strong{ background:var(--bubble-asst-bg); color:var(--bubble-asst-fg); border-color:var(--bubble-asst-bg); }
+  .evbody{ margin-top:10px; max-width:72ch; font-family:var(--font-nh); font-weight:400; font-size:16px; line-height:1.45; letter-spacing:-0.02em; white-space:pre-wrap; word-break:break-word; color:var(--text); }
+  .evsrc{ color:var(--muted); }   /* quiet source suffix on an announcement body */
+  .evhint{ margin-top:8px; font-family:var(--font-cond); text-transform:uppercase; font-size:12px; letter-spacing:0.12em; color:var(--muted); }
+
+  /* ---- pending strip: slim persistent indicator pinned at the bottom of the transcript area ----
+     Sits in #transcriptArea after the scrolling transcript, so it stays visible after the log
+     scrolls. Shown only while a voice confirmation is outstanding AND the live view is up (never in
+     the read-only history view). .strong inverts the whole strip for a hazardous pending action. */
+  #pendingStrip{ display:flex; align-items:center; gap:14px; padding:10px 20px; border-top:2px solid var(--border); background:var(--surface); }
+  #pendingStrip .ps-chip{ font-family:var(--font-cond); text-transform:uppercase; font-weight:500; font-size:11px; letter-spacing:0.1em; padding:3px 8px; background:var(--bubble-asst-bg); color:var(--bubble-asst-fg); }
+  #pendingStrip .ps-text{ flex:1; min-width:0; font-family:var(--font-nh); font-size:15px; letter-spacing:-0.02em; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #pendingStrip .ps-hint{ font-family:var(--font-cond); text-transform:uppercase; font-size:11px; letter-spacing:0.12em; color:var(--muted); white-space:nowrap; }
+  #pendingStrip.strong{ background:var(--bubble-asst-bg); }
+  #pendingStrip.strong .ps-text, #pendingStrip.strong .ps-hint{ color:var(--bubble-asst-fg); }
+  #pendingStrip.strong .ps-chip{ background:var(--bubble-asst-fg); color:var(--bubble-asst-bg); }
+
+  /* ---- footer bar ---- */
+  footer{ border-top:2px solid var(--border); background:var(--surface); padding:12px 20px; font-family:var(--font-cond); text-transform:uppercase; font-size:12px; letter-spacing:0.2em; color:var(--text); }
+
+  /* ---- workspace: transcript (#chat) + config drawer (#config), orientation-aware split ----
+     #chat is the transcript scroll region; #config scrolls independently; the body never scrolls.
+     Portrait (default): config is a bottom drawer, short at rest (slim hint), up to 50dvh when open.
+     Landscape (>=768px): config is a right column at a clamped, transcript-favoring width. INSTANT:
+     no transitions on the split or drawer. */
+  #workspace{ flex:1; display:flex; flex-direction:column; min-height:0; }
+  #config{
+    display:flex; flex-direction:column; overflow-y:auto; background:var(--surface);
+    max-height:50dvh; border-top:2px solid var(--border);
+  }
+
+  /* config help: rest-state guidance that panels replace when opened. Two faces inside
+     #confighelp: a full padded card (landscape) and a slim one-line hint (portrait). */
+  .ch-full{ display:none; padding:20px; }
+  .ch-slim{ display:block; padding:14px 20px; font-family:var(--font-cond); text-transform:uppercase; font-size:12px; letter-spacing:0.12em; color:var(--muted); }
+  .ch-title{ font-family:var(--font-cond); text-transform:uppercase; font-weight:500; font-size:12px; letter-spacing:0.2em; margin:0 0 16px; }
+  .ch-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:12px; }
+  .ch-list li{ font-family:var(--font-nh); font-size:15px; line-height:1.4; color:var(--muted); }
+  .ch-k{ font-family:var(--font-cond); text-transform:uppercase; font-weight:500; font-size:12px; letter-spacing:0.12em; color:var(--text); margin-right:10px; }
+  .ch-foot{ margin:18px 0 0; font-family:var(--font-cond); text-transform:uppercase; font-size:12px; letter-spacing:0.12em; line-height:1.5; color:var(--muted); }
+  /* hide the help entirely whenever any panel is open (panels replace it). Pure CSS, keyed
+     off the existing [hidden] signal, so the panel toggle JS needs no change. */
+  #config:has(.panel:not([hidden])) #confighelp{ display:none; }
+  #config.help-folded #confighelp{ display:none; }
+
+  /* ---- session history: row list + inline rename + read-only-view banner ---- */
+  #sessionList{ display:flex; flex-direction:column; }
+  .sess-row{ display:flex; align-items:center; gap:14px; padding:10px 8px; border-top:2px solid var(--border); border-left:4px solid transparent; cursor:pointer; }
+  .sess-row:first-child{ border-top:0; }
+  .sess-row.selected{ border-left-color:var(--border); background:var(--hairline); }   /* the row currently shown in the transcript pane */
+  .sess-num{ font-family:var(--font-cond); text-transform:uppercase; font-weight:500; font-size:12px; letter-spacing:0.1em; min-width:28px; }
+  .sess-name{ flex:1; min-width:0; font-family:var(--font-nh); font-size:15px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .sess-rename-input{ flex:1; min-width:0; border:0; border-bottom:2px solid var(--border); background:var(--input-bg); color:var(--input-fg); font-family:var(--font-nh); font-size:15px; padding:2px 0; }
+  .sess-badge{ font-family:var(--font-cond); text-transform:uppercase; font-weight:500; font-size:11px; letter-spacing:0.1em; padding:3px 8px; background:var(--bubble-asst-bg); color:var(--bubble-asst-fg); }
+  .sess-time{ font-family:var(--font-cond); text-transform:uppercase; font-size:11px; letter-spacing:0.08em; color:var(--muted); white-space:nowrap; }
+  /* operator-only owner tag: which client owns a row. Muted + condensed like .sess-time, but
+     text-transform:none so an email address renders faithfully (not uppercased). */
+  .sess-owner{ font-family:var(--font-cond); text-transform:none; font-size:11px; letter-spacing:0.04em; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:22ch; }
+  .sess-btn{ font-family:var(--font-cond); font-size:13px; padding:4px 9px; line-height:1; border:2px solid var(--border); background:transparent; color:var(--btn-fg); cursor:pointer; }
+  .sess-btn:hover{ background:var(--btn-bg-active); color:var(--btn-fg-active); }
+  .sess-btn.armed{ font-family:var(--font-cond); text-transform:uppercase; font-size:11px; letter-spacing:0.08em; padding:4px 8px; background:var(--btn-bg-active); color:var(--btn-fg-active); }  /* delete two-click confirm state */
+
+  #historyBanner{ display:flex; align-items:center; justify-content:space-between; gap:16px; padding:10px 20px; border-bottom:2px solid var(--border); background:var(--surface); }
+  #historyBannerLabel{ color:var(--text); }
+
+  /* landscape (wide): side-by-side split; config becomes a clamped right column, full card */
+  @media (orientation: landscape) and (min-width:768px){
+    #workspace{ flex-direction:row; }
+    #config{
+      flex:0 0 clamp(360px, 42vw, 560px);
+      max-height:none; border-top:0; border-left:2px solid var(--border);
+    }
+    .ch-full{ display:block; }
+    .ch-slim{ display:none; }
+  }
+</style>
+<script>
+  /* Apply the saved / OS-preferred theme before first paint to avoid a flash of the wrong palette.
+     Runs synchronously in <head>: documentElement exists, the rest of the DOM does not yet. */
+  (function(){
+    try {
+      var stored = localStorage.getItem("theme");
+      var theme = (stored === "dark" || stored === "light") ? stored : (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      document.documentElement.setAttribute("data-theme", theme);
+    } catch (e) {
+      document.documentElement.setAttribute("data-theme", "light");
+    }
+  })();
+</script>
+</head>
+<body>
+<div id="authGate">
+  <div class="authcard">
+    <div class="auth-title">Lab Assistant</div>
+    <div class="auth-sub">Enter your email to continue. Access is limited to allowlisted addresses.</div>
+    <input id="authEmail" type="email" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="name@example.com" aria-label="Email address" />
+    <div id="authError" role="alert"></div>
+    <div class="auth-actions">
+      <button id="authContinue" class="btn primary">Continue</button>
+    </div>
+  </div>
+</div>
+<header>
+  <div class="brandcluster">
+    <span class="brand">Lab Assistant</span>
+    <button id="mic" class="btn primary" disabled>Start</button>
+    <span id="authWho" class="cap" hidden></span>
+    <button id="authSignout" class="btn" title="Sign out and switch identity" hidden>Sign out</button>
+    <button id="themeToggle" class="btn iconbtn" aria-label="Toggle light and dark theme" title="Switch color theme">
+      <svg class="sun" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+        <defs>
+          <clipPath id="sunClipL"><rect x="0" y="0" width="12" height="24"/></clipPath>
+          <clipPath id="sunClipR"><rect x="12" y="0" width="12" height="24"/></clipPath>
+          <g id="sunShape">
+            <circle cx="12" cy="12" r="4.4"/>
+            <rect x="11.2" y="1.6" width="1.6" height="4.6"/>
+            <rect x="11.2" y="1.6" width="1.6" height="4.6" transform="rotate(45 12 12)"/>
+            <rect x="11.2" y="1.6" width="1.6" height="4.6" transform="rotate(90 12 12)"/>
+            <rect x="11.2" y="1.6" width="1.6" height="4.6" transform="rotate(135 12 12)"/>
+            <rect x="11.2" y="1.6" width="1.6" height="4.6" transform="rotate(180 12 12)"/>
+            <rect x="11.2" y="1.6" width="1.6" height="4.6" transform="rotate(225 12 12)"/>
+            <rect x="11.2" y="1.6" width="1.6" height="4.6" transform="rotate(270 12 12)"/>
+            <rect x="11.2" y="1.6" width="1.6" height="4.6" transform="rotate(315 12 12)"/>
+          </g>
+        </defs>
+        <use href="#sunShape" class="sun-l"/>
+        <use href="#sunShape" class="sun-r"/>
+        <use href="#sunShape" class="sun-edge"/>
+      </svg>
+    </button>
+  </div>
+  <span class="stat"><span id="netdot" class="sq"></span><span id="status">connecting…</span></span>
+  <span id="vadpill"></span>
+  <div class="headbtns">
+    <button id="hintsToggle" class="btn" title="Recognizer hotwords & replacements">STT</button>
+    <button id="vadToggle" class="btn" title="VAD tuning">VAD</button>
+    <button id="pgToggle" class="btn" title="Assistant voice & params, with a trial synthesizer">TTS</button>
+    <button id="historyToggle" class="btn" title="Browse and manage past sessions">History</button>
+    <button id="helpToggle" class="btn" title="Show or hide the configure help card">?</button>
+    <button id="clear" class="btn" title="Starts a fresh, separately saved session; the current one stays in History">New session</button>
+  </div>
+</header>
+
+<div id="workspace">
+<div id="transcriptArea">
+<div id="historyBanner" hidden>
+  <span class="cap">Viewing <span id="historyBannerLabel"></span></span>
+  <button id="backToLive" class="btn">Back to live</button>
+</div>
+<main id="chat"><div class="empty" id="empty">Press Start, allow the microphone, then speak. The assistant replies out loud.</div></main>
+<main id="historyChat" hidden></main>
+<div id="pendingStrip" hidden>
+  <span class="ps-chip">Pending</span>
+  <span id="pendingStripText" class="ps-text"></span>
+  <span id="pendingStripHint" class="ps-hint">say "confirm" or "cancel"</span>
+</div>
+</div>
+
+<aside id="config" role="region" aria-label="Configuration">
+<div id="confighelp">
+  <div class="ch-full">
+    <div class="ch-title">Configure</div>
+    <ul class="ch-list">
+      <li><span class="ch-k">STT</span>recognizer hotwords + replacements</li>
+      <li><span class="ch-k">VAD</span>speech + turn detection thresholds</li>
+      <li><span class="ch-k">TTS</span>assistant voice + params, with a trial synthesizer</li>
+    </ul>
+    <div class="ch-foot">Open several at once, they stack here. Click a lit button to close.</div>
+  </div>
+  <div class="ch-slim">Tap STT / VAD / TTS above to configure</div>
+</div>
+
+<section id="hintspanel" class="panel" hidden>
+  <div class="field">
+    <span class="label">Hotwords, one per line, bias ASR toward these terms</span>
+    <textarea id="hintsHot" rows="2" placeholder="gepard&#10;OmniVAD&#10;FunASR"></textarea>
+  </div>
+  <div class="field">
+    <span class="label">Replacements, one per line, from = to</span>
+    <textarea id="hintsRep" rows="2" placeholder="guppart = gepard&#10;omni vod = OmniVAD"></textarea>
+  </div>
+  <div class="row">
+    <button id="hintsApply" class="btn primary">Apply</button>
+    <span id="hintsStatus" class="cap"></span>
+  </div>
+</section>
+
+<section id="vadpanel" class="panel" hidden>
+  <div class="row">
+    <div class="uinput"><span class="label" title="Speech probability needed to trigger. Higher = needs clearer/louder speech (fewer false triggers in noise).">Speech threshold</span>
+      <input id="vadThresh" type="number" min="0.1" max="0.9" step="0.05" value="0.5"></div>
+    <div class="uinput"><span class="label" title="Silence that ends one speech segment (feeds ASR).">Segment pause ms</span>
+      <input id="vadSegMs" type="number" min="200" max="1500" step="50" value="600"></div>
+    <div class="uinput"><span class="label" title="Extra silence after a segment before the whole turn is sent and the assistant replies.">Turn pause ms</span>
+      <input id="vadTurnMs" type="number" min="300" max="3000" step="100" value="900"></div>
+    <span id="vadCfgStatus" class="cap">changes apply live</span>
+  </div>
+</section>
+
+<section id="playground" class="panel" hidden>
+  <div class="row">
+    <div id="modelSwitcher" class="uinput" hidden title="Assistant TTS backend"><span class="label">Model</span><select id="modelSelect"></select></div>
+    <div class="uinput"><span class="label" title="Voice for the assistant's spoken replies and the trial below.">Voice</span>
+      <select id="asstVoice"><option value="default">default</option></select></div>
+    <div class="uinput"><span class="label">Temp</span>
+      <input id="asstTemp" type="number" min="0.05" max="1.5" step="0.05" value="0.3" title="sampling temperature"></div>
+    <div class="uinput"><span class="label">CFG</span>
+      <input id="asstCfg" type="number" min="1" max="3" step="0.1" value="1.0" title="text guidance (1 = single pass; >1 helps only short phrases)"></div>
+    <div class="uinput"><span class="label">Top-K</span>
+      <input id="asstTopk" type="number" min="0" max="100" step="5" value="0" title="0 = disabled"></div>
+    <div class="uinput"><span class="label" title="Cap on generated audio frames per reply sentence (higher allows longer audio).">Max frames</span>
+      <input id="asstMaxFrames" type="number" min="100" max="6000" step="50" value="2000" title="cap on generated audio frames"></div>
+    <button id="asstConfirm" class="btn primary" disabled title="Apply these voice and generation settings to the assistant">Confirm change</button>
+    <span id="asstStatus" class="cap"></span>
+  </div>
+  <div class="field">
+    <span class="label">Trial: synthesize text with the settings above (preview only, does not apply)</span>
+    <textarea id="pgText" rows="2" placeholder="Type text to synthesize…">Hello! This is the gepard voice trial.</textarea>
+  </div>
+  <div class="row">
+    <button id="pgSynth" class="btn primary">Synthesize</button>
+    <span id="pgStatus" class="cap"></span>
+  </div>
+  <audio id="pgAudio" controls></audio>
+</section>
+
+<section id="historypanel" class="panel" hidden>
+  <div class="field">
+    <span class="label">Sessions, newest first</span>
+    <div id="sessionList"></div>
+  </div>
+</section>
+</aside>
+</div>
+
+<footer>Browser VAD · Fun-ASR-Nano · Claude Haiku · gepard-1.0 TTS · English</footer>
+
+<script type="module">
+import { OmniStreamVAD } from "./vendor/omnivad/dist/index.js";
+const VAD_MODEL_URL = new URL("./vendor/omnivad/models/stream-vad.omnivad", document.baseURI).href;
+
+const $ = (id) => document.getElementById(id);
+const netdot = $("netdot"), statusEl = $("status"), vadpill = $("vadpill"),
+      chatEl = $("chat"), emptyEl = $("empty");
+
+// ---- config persistence (localStorage): survive a reload AND a WS reconnect ----
+// Namespaced, versioned keys; every read/write is wrapped (same idiom as the theme
+// snippet in <head>) so a quota error or a malformed blob falls back to defaults
+// instead of throwing. VAD is pure client state (restored straight into the inputs
+// + the module vars makeVad reads). TTS is different: the server builds a fresh
+// Session per connection that always starts at backend defaults, so restoring the
+// panel is not enough. The stored TTS config is RE-APPLIED to that fresh Session on
+// every connect, or the panel would show a voice the assistant is not actually using.
+const VAD_KEY = "la.vad.v1";
+const TTS_KEY = "la.tts.v2";   // bumped from v1: pre-defaults-change blobs held the OLD defaults (voice "default", temp 0.3) the user never chose; discard them so the new served defaults win until a fresh Confirm re-persists
+// Coerce to a finite number and clamp to the control's own range; a missing / NaN /
+// out-of-range stored value yields the fallback, never garbage fed to the server or VAD.
+function clampNum(v, lo, hi, fallback) {
+  const n = typeof v === "number" ? v : parseFloat(v);
+  if (!isFinite(n)) return fallback;
+  return Math.min(hi, Math.max(lo, n));
+}
+
+// ---- email gate: client-supplied identity checked against a server allowlist ----
+// Cloudflare Access is gone; the front door is now an email the client sends as a ?email= query
+// param, which the server checks. These helpers are pure so they can be unit-tested; the storage
+// wrappers follow the same try/catch idiom as the theme/VAD/TTS blobs.
+const EMAIL_KEY = "la.email.v1";
+let authedEmail = "";      // the identity this connection uses; only ever a valid allowlisted address at connect time (the "" default is just the pre-boot placeholder)
+let authRejected = false;  // set on auth_error / a 4000-range close so onclose shows the gate and does NOT reconnect
+
+// Pure: trim + lowercase (what we store and what we URL-encode into the WS query).
+function normalizeEmail(raw) { return (typeof raw === "string" ? raw : "").trim().toLowerCase(); }
+// Pure: basic sanity only (the server owns the real allowlist). Needs a non-empty local part, an "@",
+// a dot after it, and no interior whitespace. Deliberately lenient, just enough to catch typos/empties.
+function isValidEmail(email) {
+  if (typeof email !== "string" || !email) return false;
+  if (/\s/.test(email)) return false;
+  const at = email.indexOf("@");
+  if (at < 1) return false;
+  const domain = email.slice(at + 1);
+  return domain.indexOf(".") >= 1 && !domain.endsWith(".");
+}
+// Pure: append ?email= (URL-encoded) to the WS base, or return the base unchanged for public/skip.
+function wsUrlWithEmail(base, email) {
+  if (!email) return base;
+  return base + (base.indexOf("?") >= 0 ? "&" : "?") + "email=" + encodeURIComponent(email);
+}
+// Pure: the inline overlay message for a rejection reason.
+function authErrorMessage(reason) {
+  if (reason === "not_allowlisted") return "That email is not on the access list.";
+  if (reason === "email_required") return "Please enter your email.";
+  return "Access denied. Please check your email and try again.";
+}
+// Stored value: a valid email, or null (never chosen / corrupted / a stale empty from an older build
+// -> show the gate). There is no public/skip path from the UI: only an allowlisted email may proceed.
+// LOCAL-DEV NOTE: a dev running a non-enforcing server (empty LA_ALLOWLIST) must still type any
+// syntactically-valid throwaway address (e.g. dev@example.com) to get in; the gate no longer offers a
+// no-email shortcut. That is the accepted tradeoff for not showing a path that bypasses nothing on the
+// live (enforcing) server anyway.
+function loadEmail() {
+  let v;
+  try { v = localStorage.getItem(EMAIL_KEY); } catch { return null; }
+  if (!v) return null;
+  const e = normalizeEmail(v);
+  return isValidEmail(e) ? e : null;
+}
+function saveEmail(email) { try { localStorage.setItem(EMAIL_KEY, email); } catch {} }
+function clearStoredEmail() { try { localStorage.removeItem(EMAIL_KEY); } catch {} }
+
+// ---- WebSocket (same origin: the server serves this page + the socket) ----
+function autoWsUrl() {
+  if (location.protocol === "https:") return `wss://${location.host}/`;
+  if (location.protocol === "http:")  return `ws://${location.host}/`;
+  return "ws://localhost:8765";
+}
+let ws = null, listening = false, captures = [], turnTimer = null;
+
+function connect() {
+  if (ws) { try { ws.close(); } catch {} ws = null; }
+  statusEl.textContent = "connecting…";
+  ws = new WebSocket(wsUrlWithEmail(autoWsUrl(), authedEmail));   // identity in the query string
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => {
+    netdot.classList.add("on"); statusEl.textContent = "connected"; $("mic").disabled = false;
+    revealSignedIn();               // show the sign-out control (and "signed in as X" for a real email)
+    sendClientInfo();               // first message on the socket, before any audio can be sent
+    clearTtsRestoreRetry();         // a reconnect re-arms the restore below; drop any retry timer from the previous connection so it can't fire a list_voices for a dead restore state
+    ttsRestore = loadTtsConfig();   // arm the restore for THIS connect; the fresh Session is back at backend defaults
+    sendJson({ type: "list_tts_models" });   // eager (not lazy on panel-open): restore needs the model list even if the panel is never opened
+  };
+  ws.onclose = (ev) => {
+    netdot.classList.remove("on"); $("mic").disabled = true;
+    // Auth rejection: an auth_error just arrived, or the server closed with a 4000-range code. Show
+    // the gate and do NOT auto-reconnect (that would loop against the allowlist).
+    const authClose = authRejected || (ev && typeof ev.code === "number" && ev.code >= 4000 && ev.code <= 4099);
+    if (authClose) {
+      if (!authRejected) rejectAuth(undefined);   // a bare 4000-range close with no auth_error message
+      authRejected = false;
+      statusEl.textContent = "signed out";
+      return;
+    }
+    statusEl.textContent = "disconnected, reconnecting…"; setTimeout(connect, 2000);
+  };
+  ws.onerror = () => { statusEl.textContent = "connection error"; };
+  ws.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data); } catch { return; } handleServer(m); };
+}
+
+// ---- conversation rendering (editorial transcript: role chip + measured body) ----
+let curUser = null;      // the user entry accumulating this turn's segments
+let curAsst = null;      // the assistant entry currently receiving streamed TEXT (reply_delta target)
+let speakingAsst = null; // the assistant entry currently showing the "speaking" chip (tied to AUDIO, not text)
+let curSource = null;    // the reply BufferSourceNode currently playing (was an <audio>; now WebAudio for iOS)
+let replyDecoding = false;    // a reply clip is between decodeAudioData and start(); blocks re-entrant double-play
+let replyGen = 0;             // bumped on barge-in/stop; a decode resolving for an old gen is discarded
+let audioQueue = [];     // FIFO of reply_audio clips (base64 wav) queued for the in-flight turn
+let audioStreamEnded = false; // true once reply_audio_end has arrived for the in-flight turn
+let acceptingAudio = true;    // false after barge-in until the next reply_start; gates stale reply_audio
+let replyInFlight = false;    // true from reply_start until the turn's terminal message; gates the cancel_turn we send on barge-in
+let replyGotClip = false;     // at least one reply_audio arrived this turn; with !replyPlayedAny on drain -> a real failure to surface
+let replyPlayedAny = false;   // at least one reply clip actually started playing this turn
+
+// ---- shared WebAudio playback (reply + announcements) ----
+// iOS does NOT unlock <audio>.play() from the mic permission: each element needs its own gesture, so
+// the old queue silently drained (NotAllowedError swallowed by .catch). Desktop only worked via
+// Chrome's page-interaction autoplay policy. Fix: decode every clip and play it through ONE
+// AudioContext created + resumed inside the Start tap; a gesture-resumed context plays freely after.
+// The earcon keeps its own context (left untouched). playCtx is kept across stop/start and re-resumed
+// on each Start.
+let playCtx = null;
+let playbackWarned = false;   // a blocked/decode-failure hint is showing; guards against per-clip spam and lets a success clear it
+
+function ensurePlayCtx() {
+  if (!playCtx) {
+    try { playCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch (e) { return null; }
+  }
+  if (playCtx.state === "suspended") playCtx.resume().catch(() => {});   // fire-and-forget; the gesture path awaits where it matters
+  return playCtx;
+}
+// base64 -> ArrayBuffer for decodeAudioData. Throws on malformed input; callers wrap it.
+function b64ToArrayBuffer(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+// Decode one base64 wav to an AudioBuffer, resolving null on any failure (never rejects, so a bad
+// clip skips instead of stalling). Supports both the promise and the older callback form of
+// decodeAudioData, since iOS WebKit shipped the callback-only form for years.
+function decodeAudio(ctx, b64) {
+  return new Promise((resolve) => {
+    let arr;
+    try { arr = b64ToArrayBuffer(b64); } catch (e) { resolve(null); return; }
+    let done = false;
+    const ok = (buf) => { if (!done) { done = true; resolve(buf || null); } };
+    const bad = () => { if (!done) { done = true; resolve(null); } };
+    try {
+      const p = ctx.decodeAudioData(arr, ok, bad);
+      if (p && typeof p.then === "function") p.then(ok, bad);
+    } catch (e) { bad(); }
+  });
+}
+// Neutral status text to restore after a playback warning clears (mirrors what start() shows).
+function listeningStatusText() {
+  if (!listening) return "connected";
+  const hz = hwSampleRate ? Math.round(hwSampleRate) : null;
+  if (hz === 16000) return "listening (16000 Hz)";
+  return hz ? "listening (" + hz + " Hz -> 16000)" : "listening";
+}
+function reportPlaybackBlocked(msg) { playbackWarned = true; statusEl.textContent = "⚠ " + (msg || "audio blocked: tap Start again"); }
+function reportDecodeFail() { playbackWarned = true; statusEl.textContent = "⚠ audio decode failed"; }
+function clearPlaybackWarn() { if (playbackWarned) { playbackWarned = false; statusEl.textContent = listeningStatusText(); } }
+
+function clearEmpty() { if (emptyEl && emptyEl.parentNode) emptyEl.remove(); }
+function atBottom() { return chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight < 80; }
+function scroll() { chatEl.scrollTop = chatEl.scrollHeight; }
+
+function makeMsg(role, container) {
+  container = container || chatEl;   // default target is the live transcript; historyChat passes itself
+  const el = document.createElement("div");
+  el.className = "msg " + role;
+  const tag = document.createElement("div"); tag.className = "mtag";
+  tag.textContent = role === "user" ? "You" : "Assistant";
+  const body = document.createElement("div"); body.className = "mbody";
+  el.appendChild(tag); el.appendChild(body);
+  el._body = body;
+  container.appendChild(el);
+  return el;
+}
+
+// Pure (unit-tested): the quiet tag for a gate-discarded / side-speech segment, "" for a normal one.
+// discarded (the noise gate's reason) takes precedence over addressed; an unknown discarded reason
+// still renders [dropped] so a future server value never silently loses the "ignored" signal.
+function dropTagText(discarded, addressed) {
+  if (discarded === "low_confidence") return "[dropped: low confidence]";
+  if (discarded === "degenerate") return "[dropped: repetition]";
+  if (discarded != null && discarded !== "") return "[dropped]";   // unknown reason: still mark it ignored
+  if (addressed === false) return "[ignored: side speech]";        // side speech (LA_ADDRESSED); true/absent = normal
+  return "";
+}
+// Pure (unit-tested): the canonical reason key for a segment ("" when it is not a drop). Same
+// precedence as dropTagText: discarded wins over addressed; an unknown discarded value -> "dropped".
+function dropReasonKey(discarded, addressed) {
+  if (discarded === "low_confidence") return "low_confidence";
+  if (discarded === "degenerate") return "degenerate";
+  if (discarded != null && discarded !== "") return "dropped";
+  if (addressed === false) return "side_speech";
+  return "";
+}
+// Pure (unit-tested): a transcript the server ACCEPTED (real, addressed speech), i.e. NOT dropped and
+// NOT side speech. This is the confidence gate for barge-in: only an accepted transcript hushes the
+// assistant, so noise / low-confidence blips do not interrupt. Defined via dropReasonKey so the
+// accepted/dropped split is single-source with the rendering path.
+function isAcceptedTranscript(discarded, addressed) { return dropReasonKey(discarded, addressed) === ""; }
+// Pure: how a reason key reads in the aggregate summary.
+function dropReasonLabel(key) {
+  if (key === "low_confidence") return "low confidence";
+  if (key === "degenerate") return "repetition";
+  if (key === "side_speech") return "side speech";
+  return "dropped";
+}
+// Pure (unit-tested): the collapsed summary line for a run of drops, e.g.
+// "6 ignored (low confidence x5, repetition x1)". Counts are grouped in first-seen order.
+function dropRunSummary(keys) {
+  const order = [], counts = {};
+  keys.forEach(k => { if (!(k in counts)) { counts[k] = 0; order.push(k); } counts[k]++; });
+  return keys.length + " ignored (" + order.map(k => dropReasonLabel(k) + " x" + counts[k]).join(", ") + ")";
+}
+// Pure (unit-tested): split a row sequence into consecutive drop-runs. rows: [{drop, key}]; a
+// non-drop row breaks the current run. Mirrors the imperative curDropRun logic below for testing.
+function segmentDropRuns(rows) {
+  const runs = []; let cur = null;
+  for (const r of rows) {
+    if (r && r.drop) { if (!cur) { cur = []; runs.push(cur); } cur.push(r.key); }
+    else cur = null;
+  }
+  return runs;
+}
+
+// The active consecutive-drop aggregate row; null after any non-drop content row breaks the run.
+let curDropRun = null;
+function breakDropRun() { curDropRun = null; }
+
+function addUserSegment(text, id, meta) {
+  if (!text) return;
+  clearEmpty();
+  meta = meta || {};
+  // A gate-discarded / side-speech segment got no reply and did NOT join the turn. It goes into the
+  // consecutive-drop aggregate (a compact, expandable single row), never into the real turn row.
+  if (dropReasonKey(meta.discarded, meta.addressed)) { addDropSegment(text, id, meta.discarded, meta.addressed); return; }
+  // A real (addressed, non-discarded) segment ends any run of drops before it, then aggregates into
+  // ONE row per turn (matches persisted history, one line per turn); texts join with spaces.
+  breakDropRun();
+  const stick = atBottom();
+  if (!curUser) {
+    curUser = makeMsg("user");
+    curUser._body.textContent = text;
+    curUser._segCount = 0;
+  } else {
+    curUser._body.textContent += " " + text;   // later segments of the same turn
+  }
+  // Capture mode: add a numbered chip for THIS segment under the aggregated row. Each chip labels its
+  // own segment id independently, so one-turn-one-line holds while every recording stays flaggable.
+  // A label still maps to exactly one recording (the chip's id), never to the merged turn text.
+  if (captureOn && id != null) {
+    curUser._segCount = (curUser._segCount || 0) + 1;
+    addTurnChip(curUser, id, curUser._segCount);
+  }
+  if (stick) scroll();
+}
+
+// Append one dropped segment to the current consecutive-drop aggregate, creating the aggregate row if
+// this drop starts a new run. The row is a disclosure: a compact summary line (the tap target) over a
+// collapsed details list of per-segment mini-rows. It updates in place as the run grows. In capture
+// mode each mini-row keeps its own flag control, so a wrongly-dropped utterance is still labelable.
+function addDropSegment(text, id, discarded, addressed) {
+  const stick = atBottom();
+  const key = dropReasonKey(discarded, addressed);
+  const tagText = dropTagText(discarded, addressed);
+  if (!curDropRun) {
+    const row = document.createElement("div"); row.className = "msg drop-run";
+    const summary = document.createElement("button"); summary.type = "button"; summary.className = "drop-summary"; summary.setAttribute("aria-expanded", "false");
+    const caret = document.createElement("span"); caret.className = "drop-caret"; caret.textContent = "▸";   // right-pointing triangle
+    const label = document.createElement("span"); label.className = "drop-summary-text";
+    summary.appendChild(caret); summary.appendChild(label);
+    const details = document.createElement("div"); details.className = "drop-details"; details.hidden = true;
+    summary.onclick = () => {
+      const open = details.hidden;                         // about to open if currently hidden
+      details.hidden = !open;
+      caret.textContent = open ? "▾" : "▸";       // down triangle when open
+      summary.setAttribute("aria-expanded", String(open));
+    };
+    row.appendChild(summary); row.appendChild(details);
+    row._keys = []; row._label = label; row._details = details;
+    chatEl.appendChild(row);
+    curDropRun = row;
+  }
+  const row = curDropRun;
+  row._keys.push(key);
+  const item = document.createElement("div"); item.className = "drop-item";
+  const txt = document.createElement("span"); txt.className = "drop-item-text"; txt.textContent = text;
+  const tag = document.createElement("span"); tag.className = "seg-tag"; tag.textContent = tagText;
+  item.appendChild(txt); item.appendChild(tag);
+  if (captureOn && id != null) attachLabelControl(item, id);   // a wrongly-dropped utterance is exactly what the operator needs to flag as speech
+  row._details.appendChild(item);
+  row._label.textContent = dropRunSummary(row._keys);
+  if (stick) scroll();
+}
+
+// ---- capture mode: per-transcript labeling ----
+// Capture mode is owned by the server (it decides whether segments are written to disk) and told to
+// us once on connect via capture_state. Here it does exactly one thing: gate the labeling controls,
+// so the tester can attribute a bad transcript to its cause. Off = no trace of any of this in the
+// DOM, and the transcript is identical to a build without this feature.
+let captureOn = false;
+const segLabels = {};   // transcript id -> {label, acked}: the label the tester chose, and whether the server has confirmed it
+const segRender = {};   // transcript id -> a repaint fn for its UI (flag row OR turn chip), called on pick / ack
+
+const LABEL_CHOICES = [
+  ["noise", "Noise"],                   // not speech at all: the recognizer invented words out of room noise
+  ["other_speaker", "Other speaker"],   // real speech, but not the operator
+  ["speech", "Speech"],                 // correct: it really was the operator talking
+];
+// Pure: how a label id reads in an applied tag. Unknown ids render as themselves rather than vanish.
+function labelDisplay(label) {
+  if (!label) return "";
+  const hit = LABEL_CHOICES.find(([id]) => id === label);
+  return hit ? hit[1].toLowerCase() : String(label);
+}
+// Pure: the muted tag text for a standalone row's label ("" when unlabeled).
+function labelTagText(label) {
+  const d = labelDisplay(label);
+  return d ? "[" + d + "]" : "";
+}
+// Pure: a turn chip's face. Unlabeled -> the bare 1-based number; labeled -> "N: label".
+function chipLabelText(index, label) {
+  const d = labelDisplay(label);
+  return d ? index + ": " + d : String(index);
+}
+
+function setCaptureMode(on) {
+  captureOn = !!on;   // read by addUserSegment: whether user rows get labeling controls
+}
+
+// Shared three-choice label menu for one segment id. onPick runs after a choice is sent (to close
+// the opener). Selecting is optimistic: the label shows at once, muted until segment_labeled acks it.
+function buildLabelMenu(id, onPick) {
+  const menu = document.createElement("div");
+  menu.className = "seg-menu"; menu.hidden = true;
+  LABEL_CHOICES.forEach(([value, text]) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.dataset.label = value; b.textContent = text;
+    b.onclick = () => {
+      segLabels[id] = { label: value, acked: false };
+      sendJson({ type: "label_segment", id, label: value });
+      menu.hidden = true;
+      if (onPick) onPick();
+      const r = segRender[id]; if (r) r();
+    };
+    menu.appendChild(b);
+  });
+  return menu;
+}
+
+// Standalone flag control for a single-segment row (the gate-discarded / side-speech muted rows):
+// a flag button toggling the label menu, plus a muted applied tag.
+function attachLabelControl(row, id) {
+  const wrap = document.createElement("div");
+  wrap.className = "seglbl";
+  const flag = document.createElement("button");
+  flag.className = "seg-flag"; flag.type = "button"; flag.textContent = "⚑";
+  flag.title = "Label this segment (debug capture)";
+  flag.setAttribute("aria-label", "Label this segment");
+  flag.setAttribute("aria-expanded", "false");
+  const menu = buildLabelMenu(id, () => { flag.classList.remove("on"); flag.setAttribute("aria-expanded", "false"); });
+  const tag = document.createElement("span"); tag.className = "seg-tag";
+  flag.onclick = () => {   // plain toggle: tap to open, tap to close (no hover dependency)
+    menu.hidden = !menu.hidden;
+    flag.classList.toggle("on", !menu.hidden);
+    flag.setAttribute("aria-expanded", String(!menu.hidden));
+  };
+  wrap.appendChild(flag); wrap.appendChild(menu); wrap.appendChild(tag);
+  row.appendChild(wrap);
+  segRender[id] = () => {
+    const st = segLabels[id] || {};
+    tag.textContent = labelTagText(st.label);
+    tag.classList.toggle("pending", !!st.label && !st.acked);
+    menu.querySelectorAll("button").forEach(b => b.classList.toggle("sel", b.dataset.label === st.label));
+  };
+  segRender[id]();
+}
+
+// One numbered chip in the aggregated turn row's chip strip. Tapping the chip toggles a label menu
+// for that segment's own id; the applied label shows on the chip itself ("2: noise").
+function addTurnChip(row, id, index) {
+  let strip = row._chips;
+  if (!strip) { strip = document.createElement("div"); strip.className = "chipstrip"; row.appendChild(strip); row._chips = strip; }
+  const wrap = document.createElement("div"); wrap.className = "chipwrap";
+  const chip = document.createElement("button");
+  chip.className = "seg-chip"; chip.type = "button";
+  chip.setAttribute("aria-label", "Label segment " + index);
+  chip.setAttribute("aria-expanded", "false");
+  const menu = buildLabelMenu(id, () => { chip.classList.remove("on"); chip.setAttribute("aria-expanded", "false"); });
+  chip.onclick = () => {
+    menu.hidden = !menu.hidden;
+    chip.classList.toggle("on", !menu.hidden);
+    chip.setAttribute("aria-expanded", String(!menu.hidden));
+  };
+  wrap.appendChild(chip); wrap.appendChild(menu);
+  strip.appendChild(wrap);
+  segRender[id] = () => {
+    const st = segLabels[id] || {};
+    chip.textContent = chipLabelText(index, st.label);
+    chip.classList.toggle("labeled", !!st.label);
+    chip.classList.toggle("pending", !!st.label && !st.acked);
+    menu.querySelectorAll("button").forEach(b => b.classList.toggle("sel", b.dataset.label === st.label));
+  };
+  segRender[id]();
+}
+
+// segment_labeled: the server persisted the label. It may name an id we never rendered (another
+// tab, an older session), so an unknown id is dropped silently rather than treated as an error.
+function handleSegmentLabeled(m) {
+  if (!segRender[m.id]) return;
+  segLabels[m.id] = { label: m.label, acked: true };
+  segRender[m.id]();
+}
+
+function clearSegLabels() {
+  for (const k of Object.keys(segLabels)) delete segLabels[k];
+  for (const k of Object.keys(segRender)) delete segRender[k];
+}
+function startAssistant() {
+  clearEmpty();
+  breakDropRun();   // an assistant reply ends any run of drops before it
+  const stick = atBottom();
+  curAsst = makeMsg("asst"); curAsst.classList.add("speaking"); curAsst._body.textContent = "";
+  speakingAsst = curAsst;
+  acceptingAudio = true; audioQueue = []; audioStreamEnded = false;   // fresh audio state for the new turn
+  replyGotClip = false; replyPlayedAny = false;                       // fresh failure-detection state for the new turn
+  if (stick) scroll();
+}
+function appendAssistant(text) {
+  if (!curAsst) startAssistant();
+  const stick = atBottom();
+  curAsst._body.textContent += text;
+  if (stick) scroll();
+}
+// Text stream is done, but the assistant may still be speaking queued audio; the "speaking"
+// chip stays on the element (tracked separately as speakingAsst) until audio truly ends.
+function finishAssistant() { curAsst = null; }
+
+function removeSpeakingChip() {
+  if (speakingAsst) { speakingAsst.classList.remove("speaking"); speakingAsst = null; }
+}
+
+// ---- lab action events: display-only annotation rows + a pinned pending strip ----
+// These render into the LIVE transcript only and hold no session/TTS/history state. The event
+// rows are plain DOM appended to #chat; the pending strip is a separate pinned indicator.
+let pendingAction = null;   // {readback, severity} while a spoken confirm is outstanding; null otherwise
+
+function formatArgVal(v) {
+  if (v == null) return "";
+  if (typeof v === "object") { try { return JSON.stringify(v); } catch { return String(v); } }
+  return String(v);
+}
+// Compact "intent(k=v, k=v)" one-liner for an event row summary. Empty args -> just the intent.
+function eventSummary(intent, args) {
+  const name = intent || "action";
+  if (!args || typeof args !== "object") return name;
+  const parts = Object.keys(args).map(k => `${k}=${formatArgVal(args[k])}`);
+  return parts.length ? `${name}(${parts.join(", ")})` : name;
+}
+function cancelReasonText(reason) {
+  if (reason === "user") return "cancelled by user";
+  if (reason === "superseded") return "superseded by a new request";
+  if (reason === "expired") return "expired (not confirmed in time)";   // pending-action expiry from the server
+  return reason || "cancelled";
+}
+// Pure (unit-tested): the confirm/cancel hint line for a pending action. A non-empty string
+// confirm_phrase yields say "<phrase>" or "cancel" (an exact spoken phrase the server requires);
+// null / absent / non-string / blank falls back to the loose "confirm" wording (reversible pendings).
+function confirmHintText(confirmPhrase) {
+  const phrase = (typeof confirmPhrase === "string" && confirmPhrase.trim()) ? confirmPhrase.trim() : "confirm";
+  return 'say "' + phrase + '" or "cancel"';
+}
+// Build one event row: bracketed state chip + optional full-width body + optional quiet hint.
+// opts: { text, source (quiet muted suffix), hint, strong (inverse chip / strongest treatment), rowClass }.
+function makeEventRow(chipText, opts) {
+  opts = opts || {};
+  clearEmpty();
+  breakDropRun();   // any event / announcement row ends a run of drops before it
+  const stick = atBottom();
+  const el = document.createElement("div");
+  el.className = "msg event" + (opts.rowClass ? " " + opts.rowClass : "");
+  const chip = document.createElement("span");
+  chip.className = "evchip" + (opts.strong ? " strong" : "");
+  chip.textContent = chipText;
+  el.appendChild(chip);
+  if (opts.text || opts.source) {
+    const body = document.createElement("div"); body.className = "evbody";
+    body.textContent = opts.text || "";
+    if (opts.source) { const s = document.createElement("span"); s.className = "evsrc"; s.textContent = (opts.text ? " " : "") + opts.source; body.appendChild(s); }
+    el.appendChild(body);
+  }
+  if (opts.hint) { const h = document.createElement("div"); h.className = "evhint"; h.textContent = opts.hint; el.appendChild(h); }
+  chatEl.appendChild(el);
+  if (stick) scroll();
+  return el;
+}
+// The pinned strip shows only while an action is outstanding AND the live view is up; entering the
+// read-only history view hides it (past sessions never show a pending strip), returning restores it.
+function updatePendingStrip() {
+  const strip = $("pendingStrip");
+  const liveView = $("historyChat").hidden;
+  if (!pendingAction || !liveView) { strip.hidden = true; return; }
+  strip.hidden = false;
+  strip.classList.toggle("strong", pendingAction.severity === "hazardous");
+  $("pendingStripText").textContent = pendingAction.readback;
+  $("pendingStripHint").textContent = confirmHintText(pendingAction.confirmPhrase);   // exact spoken phrase when the server requires one, loose wording otherwise
+}
+function showPending(readback, severity, confirmPhrase) { pendingAction = { readback: readback || "", severity: severity || "", confirmPhrase }; updatePendingStrip(); }
+function clearPending() { pendingAction = null; updatePendingStrip(); }
+
+// Barge-in: hard-stop the current clip, drop everything queued for this turn, and start
+// ignoring its remaining reply_audio (the server keeps synthesizing the abandoned turn
+// regardless, so those chunks will still arrive after this). Bumping replyGen also voids any
+// decode that is mid-flight so it cannot start a source after we have torn down.
+function stopAudio() {
+  replyGen++;
+  replyDecoding = false;
+  if (curSource) { try { curSource.onended = null; curSource.stop(); } catch {} curSource = null; }
+  audioQueue = [];
+  audioStreamEnded = false;
+  acceptingAudio = false;
+  removeSpeakingChip();
+}
+// Ordered playback queue: reply_audio arrives one clip per sentence, in seq order, over the ordered
+// socket, so a plain FIFO preserves order. The first sentence can start playing while later ones are
+// still being synthesized/sent. Each clip is decoded then played as a BufferSourceNode; the source's
+// onended chains the next. A suspended context is awaited once and, if it stays suspended, reported
+// visibly (starting a source on a suspended ctx never fires onended, which would stall silently).
+function playNextInQueue() {
+  if (curSource || replyDecoding) return;   // a clip is playing or decoding; its completion chains the next
+  if (audioQueue.length === 0) {
+    if (audioStreamEnded) {
+      removeSpeakingChip();
+      // The whole reply arrived but nothing ever played, and the user did not barge in: a real
+      // failure (bad clips / blocked context), not an empty reply. Surface it if not already shown.
+      if (replyGotClip && !replyPlayedAny && acceptingAudio && !playbackWarned) reportDecodeFail();
+    }
+    flushPendingInfo();   // reply audio path is idle: a held info announcement may now play
+    return;
+  }
+  const ctx = ensurePlayCtx();
+  if (!ctx) { audioQueue = []; if (audioStreamEnded) removeSpeakingChip(); reportPlaybackBlocked("audio unavailable in this browser"); return; }
+  if (ctx.state === "suspended") {
+    const gen = replyGen;
+    replyDecoding = true;                    // hold the queue while we try to wake the context
+    ctx.resume().catch(() => {}).then(() => {
+      if (gen !== replyGen) return;          // barged in while resuming: a newer owner holds the state, do not touch it
+      replyDecoding = false;
+      if (ctx.state === "suspended") { audioQueue = []; if (audioStreamEnded) removeSpeakingChip(); reportPlaybackBlocked(); return; }
+      playNextInQueue();
+    });
+    return;
+  }
+  const b64 = audioQueue.shift();
+  const gen = replyGen;
+  replyDecoding = true;
+  decodeAudio(ctx, b64).then((buf) => {
+    if (gen !== replyGen) return;            // barged in during decode: discard; a newer owner owns replyDecoding now
+    replyDecoding = false;
+    if (!buf) { playNextInQueue(); return; } // undecodable clip: skip to the next, never stall
+    try {
+      const node = ctx.createBufferSource();
+      node.buffer = buf; node.connect(ctx.destination);
+      node.onended = () => { if (gen === replyGen) { curSource = null; playNextInQueue(); } };
+      curSource = node;
+      node.start();
+      replyPlayedAny = true;
+      clearPlaybackWarn();                   // audio is actually flowing: retire any stale warning
+    } catch (e) { curSource = null; playNextInQueue(); }
+  });
+}
+
+// ---- proactive announcements: a SEPARATE audio path from replies ----
+// Announcements never touch replyInFlight or the reply audio queue. Alerts preempt (hush the reply
+// audio, sound an earcon, then speak); info clips wait for any current playback and play when idle.
+let announceSource = null;      // the announcement BufferSourceNode currently playing (distinct from reply curSource)
+let announceDecoding = false;   // an announcement clip is between decode and start()
+let announceGen = 0;            // bumped on stopAnnounceAudio; a decode resolving for an old gen is discarded
+let pendingInfoAudio = null;    // {audio_b64, format} of an info clip held until the reply/announce path is idle
+const announceSeverity = {};    // event_id -> "info"|"alert": set on announce, read on announce_audio, cleared on announce_end
+let earconCtx = null;           // lazily-created AudioContext for the alert earcon (kept separate from playCtx by design)
+
+// Pure formatter (unit-tested): map an announce message to its event-row shape.
+function formatAnnounce(m) {
+  const alert = !!(m && m.severity === "alert");
+  const text = (m && typeof m.text === "string") ? m.text : "";
+  const src = (m && m.source != null && m.source !== "") ? String(m.source) : "";
+  return {
+    chip: alert ? "Alert" : "Event",
+    strong: alert,
+    rowClass: alert ? "alert" : "",
+    text: text || (alert ? "alert" : "event"),
+    source: src ? "(" + src + ")" : "",
+  };
+}
+
+// Stop announcement playback and drop any held info clip (barge-in and alert-preempt both use this).
+function stopAnnounceAudio() {
+  announceGen++;
+  announceDecoding = false;
+  if (announceSource) { try { announceSource.onended = null; announceSource.stop(); } catch {} announceSource = null; }
+  pendingInfoAudio = null;
+}
+// Decode + play one announcement clip on the shared context. Same WebAudio conversion as the reply
+// path; a suspended context (e.g. an announcement before Start was ever pressed) is reported visibly
+// and the clip is dropped, while its event ROW has already been rendered by the announce handler.
+function playAnnounceClip(b64) {
+  if (!b64) return;
+  const ctx = ensurePlayCtx();
+  if (!ctx) { reportPlaybackBlocked("audio unavailable in this browser"); return; }
+  const gen = announceGen;
+  const go = () => {
+    if (gen !== announceGen) return;   // superseded/stopped: a newer owner holds announceDecoding, do not touch it
+    if (ctx.state === "suspended") { announceDecoding = false; reportPlaybackBlocked(); return; }   // cannot sound now; row already shown
+    decodeAudio(ctx, b64).then((buf) => {
+      if (gen !== announceGen) return;
+      announceDecoding = false;
+      if (!buf) { flushPendingInfo(); return; }   // bad clip must not wedge the path
+      try {
+        const node = ctx.createBufferSource();
+        node.buffer = buf; node.connect(ctx.destination);
+        node.onended = () => { if (gen === announceGen) { announceSource = null; flushPendingInfo(); } };
+        announceSource = node;
+        node.start();
+        clearPlaybackWarn();
+      } catch (e) { announceSource = null; flushPendingInfo(); }
+    });
+  };
+  announceDecoding = true;
+  if (ctx.state === "suspended") ctx.resume().catch(() => {}).then(go);
+  else go();
+}
+// True while the reply audio path is still busy or streaming: an info clip must wait for it.
+function replyAudioBusy() {
+  return !!curSource || replyDecoding || audioQueue.length > 0 || (replyInFlight && !audioStreamEnded);
+}
+// Play a held info clip once nothing (reply or announcement) is playing; otherwise keep holding.
+function flushPendingInfo() {
+  if (!pendingInfoAudio) return;
+  if (announceSource || announceDecoding || replyAudioBusy()) return;
+  const a = pendingInfoAudio; pendingInfoAudio = null;
+  playAnnounceClip(a.audio_b64);
+}
+// Pure (unit-tested): a delayed announce-path callback should only fire if the announce generation
+// has not moved since it was scheduled. A barge-in or a newer alert bumps announceGen (via
+// stopAnnounceAudio), which must cancel the earlier alert's pending clip.
+function genUnchanged(scheduledGen, currentGen) { return scheduledGen === currentGen; }
+// Alert earcon: two short sine tones via WebAudio (no assets). done() fires after the beep so the
+// alert clip plays right after it. If WebAudio is unavailable, skip straight to done(). The done
+// callback is guarded by the announce generation captured NOW: if the user barges in during the
+// ~300 ms beep (stopAnnounceAudio bumps announceGen), the delayed done no-ops instead of starting
+// the alert clip over the user's speech (which would also contaminate capture).
+function playEarcon(done) {
+  const gen = announceGen;
+  const fire = () => { if (done && genUnchanged(gen, announceGen)) done(); };
+  try {
+    earconCtx = earconCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = earconCtx;
+    if (ctx.state === "suspended") ctx.resume().catch(() => {});
+    const t0 = ctx.currentTime;
+    const tone = (start, freq) => {
+      const osc = ctx.createOscillator(), g = ctx.createGain();
+      osc.type = "sine"; osc.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, start);
+      g.gain.exponentialRampToValueAtTime(0.15, start + 0.01);   // reasonable, not blaring
+      g.gain.exponentialRampToValueAtTime(0.0001, start + 0.12);
+      osc.connect(g); g.connect(ctx.destination);
+      osc.start(start); osc.stop(start + 0.13);
+    };
+    tone(t0, 880);
+    tone(t0 + 0.14, 1175);
+    setTimeout(fire, 300);   // two ~120ms tones + a small gap; fire() no-ops if a barge-in supervened
+  } catch (e) {
+    fire();
+  }
+}
+// announce_audio: route by the severity recorded from the earlier announce for this event.
+function handleAnnounceAudio(m) {
+  const sev = announceSeverity[m.event_id] || "info";
+  if (sev === "alert") {
+    stopAudio();              // hush any in-flight reply audio (reuse the barge-in hush)
+    stopAnnounceAudio();      // and any current/held announcement
+    playEarcon(() => playAnnounceClip(m.audio_b64));
+  } else if (!announceSource && !announceDecoding && !replyAudioBusy()) {
+    playAnnounceClip(m.audio_b64);                       // idle: play the info clip now
+  } else {
+    pendingInfoAudio = { audio_b64: m.audio_b64, format: m.format };   // busy: hold until idle
+  }
+}
+
+function handleServer(m) {
+  switch (m.type) {
+    case "status": statusEl.textContent = m.text; break;
+    case "auth_error": rejectAuth(m.reason); break;   // identity failed the allowlist; the server closes the socket next
+    case "error": statusEl.textContent = "⚠ " + m.text; replyInFlight = false; break;   // terminal for the turn: nothing more will arrive
+    case "transcript": {
+      // Confidence-gated barge-in: ONLY an accepted transcript (real, addressed speech) hushes the
+      // assistant and cancels its turn. A discarded / side-speech transcript does nothing to the reply
+      // audio, so noise and low-confidence blips no longer interrupt. TRADEOFF (deliberate): barge-in
+      // now waits for ASR to accept the utterance, so the assistant may talk over the first ~0.5-1.5s
+      // of real speech before stopping. Do not move this back to VAD speech-start.
+      if (isAcceptedTranscript(m.discarded, m.addressed)) {
+        stopAudio();
+        if (replyInFlight) { sendJson({ type: "cancel_turn" }); replyInFlight = false; }
+      }
+      addUserSegment((m.text || "").trim(), m.id, { discarded: m.discarded, addressed: m.addressed });
+      break;
+    }
+    case "capture_state": setCaptureMode(m.on); break;          // server owns capture mode; we only reflect it
+    case "segment_labeled": handleSegmentLabeled(m); break;      // ack of our label_segment
+    case "reply_start": curUser = null; replyInFlight = true; startAssistant(); break;
+    case "reply_delta": appendAssistant(m.text || ""); break;
+    case "reply_done": finishAssistant(); break;
+    case "reply_audio":
+      if (acceptingAudio) { replyGotClip = true; audioQueue.push(m.audio_b64); playNextInQueue(); }   // else: stale chunk from a barged-in turn, drop it
+      break;
+    case "reply_audio_end": audioStreamEnded = true; replyInFlight = false; playNextInQueue(); break;
+    case "reply_cancelled":
+      // Terminal message of a turn the user barged in on. The partial reply is already on
+      // screen via reply_delta (m.text is that same text), so we do not re-render it: just
+      // close out the assistant bubble and let the drained audio queue settle cleanly.
+      finishAssistant();
+      audioStreamEnded = true;      // no more reply_audio for this turn; let playNextInQueue terminate
+      replyInFlight = false;
+      playNextInQueue();            // drops the speaking chip if the queue is already empty
+      break;
+    case "tts_models": handleTtsModels(m); break;
+    case "tts_params": handleTtsParams(m); break;   // assistant-path params: seed controls + baseline (connect) / echo (after set_tts_params)
+    case "voices": handleVoices(m); break;          // restore intercepts the connect fetch; otherwise fills the shared dropdown
+    case "tts_test_audio": $("pgStatus").textContent = "done ✓"; playPg(m.audio_b64); break;
+    case "tts_test_error": $("pgStatus").textContent = "⚠ " + m.text; if (ttsRestore) retryTtsRestore(); break;   // while a restore is in flight this is its list_voices failing (TTS still booting after a redeploy): retry, don't abandon on the first error
+
+    case "hints": fillHints(m); break;
+    case "session_started":
+      currentSessionId = m.id;
+      if (typeof m.is_operator === "boolean") isOperator = m.is_operator;   // stable per connection; present on both connect and new_session
+      if (typeof m.scope === "string") sessionScope = m.scope;
+      liveSessionMeta = { id: m.id, number: m.number, name: m.name, started_at: m.started_at };
+      selectedSessionId = m.id;   // connect, and every New session, land on the live view
+      highlightSelectedRow();
+      break;
+    case "sessions": renderSessions(m.sessions || []); break;
+    case "session_data": {
+      renderHistoryMessages(m.messages);
+      $("chat").hidden = true;
+      $("historyChat").hidden = false;
+      $("historyBannerLabel").textContent = "Session " + m.number + ": " + (m.name || UNTITLED);
+      $("historyBanner").hidden = false;
+      selectedSessionId = m.id;
+      highlightSelectedRow();
+      updatePendingStrip();   // entering the read-only history view hides the live pending strip
+      break;
+    }
+    // ---- lab action events (display-only; never enter history/session/TTS logic) ----
+    case "action_pending": {
+      const strong = m.severity === "hazardous";
+      makeEventRow("Pending", {
+        text: m.readback || eventSummary(m.intent, m.args),
+        hint: confirmHintText(m.confirm_phrase),
+        strong, rowClass: "pending",
+      });
+      showPending(m.readback || eventSummary(m.intent, m.args) || "action awaiting confirmation", m.severity, m.confirm_phrase);
+      break;
+    }
+    case "action_executed": {
+      let text = eventSummary(m.intent, m.args);
+      const detail = m.result && m.result.detail;
+      if (detail) text += (text ? " -> " : "") + detail;
+      makeEventRow(m.confirmed ? "Confirmed" : "Done", { text });
+      clearPending();
+      break;
+    }
+    case "action_rejected":
+      makeEventRow("Rejected", { text: (m.intent ? m.intent + ": " : "") + (m.reason || "rejected") });
+      clearPending();
+      break;
+    case "action_cancelled":
+      makeEventRow("Cancelled", { text: cancelReasonText(m.reason) });
+      clearPending();
+      break;
+    case "action_halted":
+      stopAudio();   // fast-path STOP: hush the assistant immediately (barge-in no longer fires at VAD time, so the halt must hush here)
+      makeEventRow("Halted", { text: m.halted || "halted", strong: true, rowClass: "halted" });
+      clearPending();
+      break;
+
+    // ---- proactive announcements (display-only row + separate audio path) ----
+    case "announce": {
+      const a = formatAnnounce(m);
+      announceSeverity[m.event_id] = a.strong ? "alert" : "info";
+      makeEventRow(a.chip, { text: a.text, source: a.source, strong: a.strong, rowClass: a.rowClass });
+      break;
+    }
+    case "announce_audio": handleAnnounceAudio(m); break;   // exactly one per event; may be absent if TTS failed
+    case "announce_end":
+      delete announceSeverity[m.event_id];   // per-event state cleared; also the signal no audio is coming if none did
+      break;
+
+    case "session_renamed": updateSessionName(m.id, m.name); break;
+    case "session_deleted": {
+      sessionsCache = sessionsCache.filter(s => s.id !== m.id);
+      const row = [...document.querySelectorAll("#sessionList .sess-row")].find(r => r.dataset.id === m.id);
+      if (row) row.remove();
+      if (selectedSessionId === m.id && !$("historyChat").hidden) showLiveView();   // was viewing the now-deleted session
+      break;
+    }
+    default: break;   // unknown / future message types: ignore defensively (no throw, no garbage render)
+  }
+}
+
+function sendJson(p) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(p)); }
+
+// ---- client_info: the environment that produced the audio ----
+// Saved capture is only useful next to the conditions it was recorded under, so we report the
+// browser, the real capture rate, whether the resampler is in the path, and the live VAD settings.
+// Pure builder (unit-tested): everything it needs is passed in, nothing is read from globals.
+// hw_sample_rate is null until the AudioContext exists (it is created by Start, not by page load),
+// and resampled stays false in that window: no resampler is running yet, so claiming one would be
+// wrong. Once the rate is known it is the plain hardware != 16 kHz test.
+function buildClientInfo(env) {
+  const raw = env.hwSampleRate;
+  const hz = (typeof raw === "number" && isFinite(raw)) ? Math.round(raw) : null;
+  return {
+    type: "client_info",
+    ua: env.ua || "",
+    platform: env.platform || "",
+    hw_sample_rate: hz,
+    resampled: hz !== null && hz !== 16000,
+    vad_threshold: env.vadThreshold,
+    seg_pause_ms: env.segPauseMs,
+    turn_pause_ms: env.turnPauseMs,
+    viewport: env.innerWidth < 768 ? "mobile" : "desktop",
+  };
+}
+// Sent on connect (rate unknown), again right after a successful Start (rate known), and again on
+// every applied VAD change, so the server's latest copy always describes what produced the audio.
+function sendClientInfo() {
+  sendJson(buildClientInfo({
+    ua: navigator.userAgent,
+    platform: navigator.platform || "",
+    hwSampleRate: hwSampleRate,
+    vadThreshold: vadThreshold,
+    segPauseMs: vadMinSilenceFrames * 10,   // frames -> ms, the inverse of the panel's ms -> frames rule
+    turnPauseMs: turnSilenceMs,
+    innerWidth: window.innerWidth,
+  }));
+}
+
+// End of the whole spoken turn: flush the accumulated segments so the assistant
+// replies once (not once per pause). Fired after turnSilenceMs of extra silence
+// past a segment end, and cancelled if the user starts speaking again.
+function endTurn() { turnTimer = null; sendJson({ type: "end_turn" }); }
+
+// ---- audio + browser VAD ----
+const FRAME = 160;                 // 10ms @ 16kHz
+const PREROLL_FRAMES = 30;         // ~300ms onset recovery
+const MIN_SEG_SAMPLES = 16000 * 0.3;
+let vadThreshold = 0.5;            // OmniVAD speech activation threshold [0,1]
+let vadMinSilenceFrames = 60;      // silence that ends one speech SEGMENT (10ms/frame)
+let turnSilenceMs = 900;           // extra silence after a segment before the TURN ends
+let vad = null;                    // current OmniStreamVAD instance (hot-swappable)
+let hwSampleRate = null;           // the AudioContext's real rate, known only once Start has run (null before that); reported in client_info. Kept across Stop: it still describes the audio already sent.
+async function makeVad() {
+  return OmniStreamVAD.create({ modelUrl: VAD_MODEL_URL, threshold: vadThreshold, minSilenceFrames: vadMinSilenceFrames });
+}
+
+function floatToInt16Buffer(chunks) {
+  let n = 0; for (const c of chunks) n += c.length;
+  const pcm = new Float32Array(n); let o = 0;
+  for (const c of chunks) { pcm.set(c, o); o += c.length; }
+  const i16 = new Int16Array(pcm.length);
+  for (let i = 0; i < pcm.length; i++) { let s = Math.max(-1, Math.min(1, pcm[i])); i16[i] = s < 0 ? s * 0x8000 : s * 0x7fff; }
+  return i16.buffer;
+}
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer); let bin = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  return btoa(bin);
+}
+
+// ---- streaming resampler: the hardware rate -> 16 kHz ----
+// We can no longer ask for a 16 kHz AudioContext: WebKit pins the context to the hardware rate
+// (48000 on iOS) and refuses anything else, which is why the mic failed there and not on desktop
+// Chrome. So the context runs native and the downsampling happens here, because the wire format
+// is fixed: the server wraps our bytes as 16 kHz PCM16.
+//
+// Design: a box (moving-average) lowpass of ceil(ratio) taps, then a linear-interpolated read at
+// a fractional step of inRate/16000. The box is the anti-aliasing filter: without it, everything
+// above 8 kHz folds back down into the speech band. Both the fractional read position and the
+// filter's look-back tail live in closure state and survive across onaudioprocess blocks, so a
+// long signal cut into blocks resamples identically to the same signal in one piece: no clicks at
+// the block seams and no drift of the 10 ms VAD frame boundaries.
+function makeResampler(inRate, outRate) {
+  if (inRate === outRate) return (block) => block;      // native 16 kHz: identity, zero cost
+  const ratio = inRate / outRate;
+  const taps = Math.max(1, Math.ceil(ratio));           // box width: about one output sample period
+  let hist = new Float32Array(0);                       // unconsumed input + the filter's look-back
+  let pos = 0;                                          // fractional read position within hist+block
+  const box = (x, i) => {                               // lowpassed value of x at i
+    let s = 0, n = 0;
+    for (let k = i - taps + 1; k <= i; k++) if (k >= 0) { s += x[k]; n++; }
+    return n ? s / n : 0;
+  };
+  return (block) => {
+    const x = new Float32Array(hist.length + block.length);
+    x.set(hist, 0); x.set(block, hist.length);
+    const out = new Float32Array(Math.ceil(x.length / ratio) + 1);
+    let n = 0, p = pos;
+    while (Math.floor(p) + 1 < x.length) {              // need both interpolation neighbours
+      const i0 = Math.floor(p), f = p - i0;
+      const y0 = box(x, i0), y1 = box(x, i0 + 1);
+      out[n++] = y0 + (y1 - y0) * f;
+      p += ratio;
+    }
+    const keep = Math.max(0, Math.floor(p) - taps + 1); // carry exactly the tail the next block reads back into
+    hist = x.slice(keep);
+    pos = p - keep;
+    return out.subarray(0, n);
+  };
+}
+
+// The AudioContext is built and resumed by start() inside the click gesture; it is passed in here.
+async function createCapture(stream, ctx) {
+  vad = await makeVad();
+  const resample = makeResampler(ctx.sampleRate, 16000);
+  const src = ctx.createMediaStreamSource(stream);
+  const proc = ctx.createScriptProcessor(2048, 1, 1);
+  const sink = ctx.createGain(); sink.gain.value = 0;
+
+  let carry = new Float32Array(0);
+  let collecting = false, segChunks = [], preRoll = [];
+
+  const sendSeg = () => {
+    const buffer = floatToInt16Buffer(segChunks);
+    segChunks = [];
+    if (buffer.byteLength < MIN_SEG_SAMPLES * 2) return;
+    sendJson({ type: "audio_segment", audio_b64: arrayBufferToBase64(buffer), sample_rate: 16000 });
+  };
+
+  proc.onaudioprocess = (e) => {
+    if (!vad) return;
+    const inp = resample(e.inputBuffer.getChannelData(0));   // 16 kHz mono, whatever the hardware rate is
+    const buf = new Float32Array(carry.length + inp.length);
+    buf.set(carry, 0); buf.set(inp, carry.length);
+    let i = 0;
+    for (; i + FRAME <= buf.length; i += FRAME) {
+      const frame = buf.subarray(i, i + FRAME);
+      const r = vad.processFrame(frame);
+      if (r && r.isSpeechStart && !collecting) {
+        collecting = true; segChunks = preRoll.slice(); preRoll = [];
+        clearTimeout(turnTimer); turnTimer = null;   // still talking: cancel a pending turn-end
+        // Reply barge-in has MOVED to the accepted-transcript handler (confidence-gated): noise and
+        // low-confidence speech must NOT interrupt the assistant, so the reply is no longer hushed
+        // here at VAD speech-start. Announcements are a separate, lower-stakes path, so they are
+        // still hushed immediately on speech-start (a held info clip is dropped too).
+        stopAnnounceAudio();
+        vadpill.textContent = "● speaking"; netdot.classList.add("speak");
+      }
+      const copy = frame.slice();
+      if (collecting) segChunks.push(copy);
+      else { preRoll.push(copy); if (preRoll.length > PREROLL_FRAMES) preRoll.shift(); }
+      if (r && r.isSpeechEnd && collecting) {
+        collecting = false; sendSeg();
+        clearTimeout(turnTimer); turnTimer = setTimeout(endTurn, turnSilenceMs);  // arm turn-end
+        vadpill.textContent = "…listening"; netdot.classList.remove("speak");
+      }
+    }
+    carry = buf.slice(i);
+  };
+
+  src.connect(proc); proc.connect(sink); sink.connect(ctx.destination);
+  if (ctx.state === "suspended") ctx.resume().catch(() => {});   // iOS can re-suspend while the graph is being wired
+  return { ctx, proc, src, stream };
+}
+
+// e.name is the diagnostic field (NotAllowedError, NotReadableError, ...); never report the message alone.
+function errText(e) {
+  const name = (e && e.name) ? e.name : "Error";
+  const msg = (e && e.message) ? e.message : String(e);
+  return name + ": " + msg;
+}
+function micErrText(e) {
+  const name = e && e.name;
+  if (name === "NotAllowedError" || name === "SecurityError") return "mic permission denied (check iOS Settings > Chrome > Microphone)";
+  if (name === "NotFoundError") return "no microphone found";
+  return "mic error: " + errText(e);
+}
+
+async function start() {
+  let ctx = null, mic = null;
+  // The AudioContext is constructed and resumed SYNCHRONOUSLY here, before the getUserMedia await,
+  // because iOS creates every context suspended and only honours resume() from inside a user
+  // gesture. Awaiting the mic first breaks the gesture chain and leaves a context that never runs:
+  // the UI would say "listening" while no audio ever reaches the VAD.
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    ctx = new AC();                                  // no sampleRate option: WebKit only allows the hardware rate
+    ctx.resume().catch(() => {});
+    ensurePlayCtx();                                 // create + resume the shared PLAYBACK context in the same gesture, so reply/announcement audio can sound on iOS
+  } catch (e) {
+    statusEl.textContent = "audio setup failed: " + errText(e);
+    return;
+  }
+  // Mobile browsers hide getUserMedia entirely on an insecure origin, where it would otherwise
+  // surface as a bare TypeError. Say so plainly instead.
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    try { ctx.close(); } catch {}
+    statusEl.textContent = "mic unavailable: this page must be served over https (or localhost)";
+    return;
+  }
+  // Only getUserMedia is inside the permission try/catch, so a setup failure can no longer be
+  // mislabelled as a denied permission.
+  try {
+    mic = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+  } catch (e) {
+    try { ctx.close(); } catch {}
+    statusEl.textContent = micErrText(e);
+    return;
+  }
+  try {
+    captures.push(await createCapture(mic, ctx));     // VAD wasm, the graph, the resampler
+  } catch (e) {
+    try { ctx.close(); } catch {}
+    try { mic.getTracks().forEach(t => t.stop()); } catch {}
+    statusEl.textContent = "audio setup failed: " + errText(e);
+    return;
+  }
+  setListening(true);
+  vadpill.textContent = "…listening";
+  hwSampleRate = ctx.sampleRate;
+  statusEl.textContent = listeningStatusText();
+  sendClientInfo();   // the capture rate (and so the resampler flag) is only knowable now
+}
+function stop() {
+  clearTimeout(turnTimer); turnTimer = null;
+  sendJson({ type: "end_turn" });          // flush any half-finished turn so it still gets a reply
+  for (const c of captures) { try { c.proc.disconnect(); c.src.disconnect(); c.ctx.close(); c.stream.getTracks().forEach(t => t.stop()); } catch {} }
+  captures = [];
+  vad = null;
+  setListening(false);
+  vadpill.textContent = ""; netdot.classList.remove("speak");
+  statusEl.textContent = "stopped";
+}
+function setListening(on) {
+  listening = on;
+  $("mic").textContent = on ? "Stop" : "Start";
+  $("mic").classList.toggle("live", on);
+}
+
+// ---- TTS panel: header model switcher + shared voice/param controls (assistant + trial) ----
+let ttsModels = [];        // [{id,label}] as reported by the server
+let ttsModelsLoaded = false;
+let asstVoicesLoaded = false;      // shared voice list populated
+let wantAsstVoice = "default";     // desired dropdown selection; applied once the list arrives ("default" == server default == null on the wire)
+let asstSeeded = false;            // seed the numeric params only from the first (connect) tts_params
+let lastApplied = null;            // {voice,temperature,cfg_scale,top_k,max_frames}: the server's confirmed assistant config; dirty = controls != this
+let ttsRestore = null;             // stored config being re-applied on this connect; consumed across tts_models -> voices, then nulled
+let ttsRestoreRetryTimer = null;   // pending retry of the restore's voice fetch; cleared on connect / voices reply / give-up so it never fires for a dead restore
+const TTS_RESTORE_RETRY_MS = 2000; // wait between restore voice-fetch retries (backend may still be booting right after a redeploy)
+const TTS_RESTORE_MAX_ATTEMPTS = 5;// bounded retries before giving up and leaving the panel usable at server defaults
+const pgAudioEl = $("pgAudio");
+
+function fillModelSelect(sel, models, selected) {
+  const cur = sel.value;
+  sel.innerHTML = "";
+  models.forEach(mo => {
+    const o = document.createElement("option"); o.value = mo.id; o.textContent = mo.label || mo.id; sel.appendChild(o);
+  });
+  const want = selected || cur;
+  if ([...sel.options].some(o => o.value === want)) sel.value = want;
+}
+// The header switcher always tracks the session's current model; it is the model for both the
+// assistant path and the trial synthesizer. The shared voice list is seeded once on first load.
+function handleTtsModels(m) {
+  const models = m.models || [];
+  const firstLoad = !ttsModelsLoaded;
+  ttsModels = models;
+  ttsModelsLoaded = true;
+  fillModelSelect($("modelSelect"), models, m.current);
+  $("modelSwitcher").hidden = models.length < 2;   // single-model deploys: no switcher clutter (the TTS panel stays regardless)
+  if (ttsRestore) {
+    // A stored config is being re-applied to this fresh Session. Restore OWNS the
+    // voice fetch (validate the stored voice per-backend) and, if the stored model
+    // is valid and differs from the session's current one, a model switch FIRST.
+    // set_tts_model echoes another tts_models (current == the switched model), which
+    // re-enters here with model === cur, so the switch runs at most once, then the
+    // voice fetch proceeds. An invalid/absent stored model is simply dropped.
+    const stored = (ttsRestore.model && models.some(mo => mo.id === ttsRestore.model)) ? ttsRestore.model : null;
+    const cur = m.current || m.default;
+    if (stored && stored !== cur) {
+      ttsRestore.model = stored;                                     // normalize to the validated id
+      sendJson({ type: "set_tts_model", model: stored });            // wait for the echo, then fetch voices below
+      return;
+    }
+    const target = stored || cur;                                    // voices are per-backend: fetch for the target model
+    const fetchMsg = target ? { type: "list_voices", model: target, tag: "assistant" } : { type: "list_voices", tag: "assistant" };
+    ttsRestore.voiceFetch = fetchMsg;                                // remember it verbatim so a post-redeploy retry re-sends the identical fetch
+    ttsRestore.attempts = 0;                                         // reset the retry budget each time we (re)issue the fetch from here
+    clearTtsRestoreRetry();                                          // a set_tts_model echo can re-enter here; drop any retry timer from the prior pass
+    sendJson(fetchMsg);
+    return;
+  }
+  if (firstLoad) {                                 // seed the shared voice list for the session's current backend
+    const model = m.current || m.default;
+    sendJson(model ? { type: "list_voices", model, tag: "assistant" } : { type: "list_voices", tag: "assistant" });
+  }
+}
+$("modelSelect").onchange = () => {
+  const model = $("modelSelect").value;
+  sendJson({ type: "set_tts_model", model });                     // switch the assistant backend (and the trial's model)
+  asstVoicesLoaded = false;                                       // new backend has its own voices
+  wantAsstVoice = "default";                                      // reselect the new backend's default voice in the shared dropdown
+  sendJson({ type: "list_voices", model, tag: "assistant" });     // refresh the shared dropdown; refreshConfirm re-runs when it fills
+  // No set_tts_params here: config is staged. The model swap only re-evaluates dirtiness (it flags
+  // the panel dirty when the previously applied voice was custom); Confirm applies it to the assistant.
+  // Persist the newly-APPLIED model. The staged voice reset to "default" is what a reload should
+  // restore (the old backend's voice is meaningless here); numeric params stay the applied ones.
+  if (lastApplied) saveTts(model, "default", lastApplied);
+};
+
+function playPg(b64) { pgAudioEl.src = "data:audio/wav;base64," + b64; pgAudioEl.play().catch(() => {}); }
+$("pgToggle").onclick = () => {
+  const pg = $("playground");
+  pg.hidden = !pg.hidden;
+  $("pgToggle").classList.toggle("on", !pg.hidden);
+  if (!pg.hidden) {
+    if (!ttsModelsLoaded) sendJson({ type: "list_tts_models" });
+    if (!asstVoicesLoaded && !ttsRestore) {   // during restore the voice fetch is restore-owned; don't race a second one
+      const model = $("modelSelect").value;
+      sendJson(model ? { type: "list_voices", model, tag: "assistant" } : { type: "list_voices", tag: "assistant" });
+    }
+    closeHistoryPanel();
+  }
+};
+// Trial: preview the CURRENT shared controls via tts_test (header model + shared voice/params).
+// Pure preview: never applies anything to the assistant and never touches the confirm/dirty state.
+$("pgSynth").onclick = () => {
+  const text = $("pgText").value.trim();
+  if (!text) return;
+  $("pgStatus").textContent = "synthesizing…";
+  const model = $("modelSelect").value;
+  const v = $("asstVoice").value;
+  sendJson({
+    type: "tts_test", text,
+    ...(model ? { model } : {}),
+    voice: v === "default" ? null : v,
+    temperature: parseFloat($("asstTemp").value),
+    cfg_scale: parseFloat($("asstCfg").value),
+    top_k: parseInt($("asstTopk").value, 10),
+    max_frames: parseInt($("asstMaxFrames").value, 10),
+  });
+};
+
+// ---- Shared TTS controls (voice + generation params): stage edits, apply on Confirm ----
+// One control set drives BOTH the assistant (via Confirm -> set_tts_params) and the trial above
+// (via Synthesize -> tts_test, preview only). Edits are STAGED: nothing is sent until Confirm.
+function fillAsstVoices(list) {
+  asstVoicesLoaded = true;
+  const sel = $("asstVoice");
+  const opts = (list && list.length ? list.slice() : []);
+  if (!opts.includes("default")) opts.unshift("default");   // "default" (server default voice) is always selectable
+  sel.innerHTML = "";
+  opts.forEach(v => { const o = document.createElement("option"); o.value = v; o.textContent = v; sel.appendChild(o); });
+  selectAsstVoice();   // apply the remembered voice from tts_params (or fall back to default)
+  refreshConfirm();    // the (re)filled dropdown may change the dirty state
+}
+function selectAsstVoice() {
+  const sel = $("asstVoice"), want = wantAsstVoice || "default";
+  sel.value = [...sel.options].some(o => o.value === want) ? want : "default";
+}
+// Persist ONLY applied config (Confirm's voice+params, the switcher's model), never
+// staged edits: on a model switch we read voice/params from lastApplied (the confirmed
+// baseline), not the live inputs which may hold an unconfirmed edit.
+function saveTts(model, voice, p) {
+  try {
+    localStorage.setItem(TTS_KEY, JSON.stringify({
+      model: model || "", voice: voice || "default",
+      temperature: p.temperature, cfg_scale: p.cfg_scale, top_k: p.top_k, max_frames: p.max_frames,
+    }));
+  } catch {}
+}
+// Parse + validate the stored TTS config into a clean shape, or null when absent /
+// malformed. Numeric fields are clamped to their control's range so a stale or hand-
+// edited blob can never feed garbage to set_tts_params. Model/voice are validated
+// later (against the live model + per-backend voice lists), not here.
+function loadTtsConfig() {
+  let o;
+  try { o = JSON.parse(localStorage.getItem(TTS_KEY) || "null"); } catch { return null; }
+  if (!o || typeof o !== "object") return null;
+  return {
+    model: typeof o.model === "string" ? o.model : "",
+    voice: (typeof o.voice === "string" && o.voice) ? o.voice : "default",
+    temperature: clampNum(o.temperature, 0.05, 1.5, 0.3),
+    cfg_scale: clampNum(o.cfg_scale, 1, 3, 1.0),
+    top_k: Math.round(clampNum(o.top_k, 0, 100, 0)),
+    max_frames: Math.round(clampNum(o.max_frames, 100, 6000, 2000)),
+  };
+}
+function clearTtsRestoreRetry() {
+  if (ttsRestoreRetryTimer) { clearTimeout(ttsRestoreRetryTimer); ttsRestoreRetryTimer = null; }
+}
+// A tts_test_error arriving while a restore is armed means the restore's list_voices
+// failed (the TTS backend is commonly not answering yet in the reconnect window right
+// after a redeploy). Keep the restore armed and re-send the SAME voice fetch after a
+// delay, up to a bounded number of tries; then give up cleanly so the panel stays usable
+// (null ttsRestore -> the manual pgToggle fetch guard unblocks) at server defaults.
+function retryTtsRestore() {
+  clearTtsRestoreRetry();                                    // never run two retry loops at once
+  if (!ttsRestore || !ttsRestore.voiceFetch) { ttsRestore = null; return; }
+  if ((ttsRestore.attempts || 0) >= TTS_RESTORE_MAX_ATTEMPTS) { ttsRestore = null; return; }   // budget spent: clean give-up
+  ttsRestore.attempts = (ttsRestore.attempts || 0) + 1;
+  const msg = ttsRestore.voiceFetch;
+  ttsRestoreRetryTimer = setTimeout(() => {
+    ttsRestoreRetryTimer = null;
+    if (ttsRestore && ws && ws.readyState === 1) sendJson(msg);   // still armed and connected: re-issue; a reconnect/give-up would have cleared us
+  }, TTS_RESTORE_RETRY_MS);
+}
+// The connect voice fetch is routed here so an in-flight restore can intercept it;
+// every other voices reply just fills the shared dropdown.
+function handleVoices(m) {
+  clearTtsRestoreRetry();   // a voices reply landed: the fetch succeeded, so cancel any pending retry before consuming/filling
+  if (ttsRestore) { finishTtsRestore(m.voices); return; }
+  fillAsstVoices(m.voices);
+}
+// Complete a restore: the voices list for the (possibly just-switched) target model
+// has arrived. Validate the stored voice AGAINST THIS LIST (an unknown name would map
+// to the backend's unconditioned voice, so fall back to "default" and never send the
+// stale name), fill the dropdown, paint the numeric inputs, then RE-APPLY the whole
+// set to the server. Painting here is safe from the asstSeeded guard: the connect
+// tts_params already flipped asstSeeded, so the set_tts_params echo won't re-seed over
+// these values, and that echo re-seeds lastApplied so refreshConfirm lands non-dirty.
+function finishTtsRestore(list) {
+  const r = ttsRestore;
+  ttsRestore = null;                              // consume: later voices replies go to fillAsstVoices
+  const sel = $("asstVoice");
+  const opts = (list && list.length ? list.slice() : []);
+  if (!opts.includes("default")) opts.unshift("default");   // "default" is always selectable
+  sel.innerHTML = "";
+  opts.forEach(v => { const o = document.createElement("option"); o.value = v; o.textContent = v; sel.appendChild(o); });
+  asstVoicesLoaded = true;
+  const voice = opts.includes(r.voice) ? r.voice : "default";   // stale voice for THIS backend -> default, never reaches set_tts_params
+  wantAsstVoice = voice;
+  selectAsstVoice();
+  $("asstTemp").value = r.temperature;
+  $("asstCfg").value = r.cfg_scale;
+  $("asstTopk").value = r.top_k;
+  $("asstMaxFrames").value = r.max_frames;
+  sendJson({                                      // server Session now matches the panel; its echo cleans the dirty state
+    type: "set_tts_params",
+    voice: voice === "default" ? null : voice,
+    temperature: r.temperature, cfg_scale: r.cfg_scale, top_k: r.top_k, max_frames: r.max_frames,
+  });
+}
+// tts_params is the server's authoritative applied config. Seed the numeric inputs once on connect,
+// remember the applied voice, and refresh the last-applied BASELINE (so a fresh connect and every
+// confirmed apply both land the panel clean / non-dirty). Numeric inputs are NOT re-seeded on later
+// echoes (that would fight an in-progress edit); the baseline still updates from the echo values.
+function handleTtsParams(m) {
+  const p = m.params || {}, d = m.defaults || {};
+  if (!asstSeeded) {
+    const seed = (id, v) => { if (v != null) $(id).value = v; };
+    seed("asstTemp", p.temperature ?? d.temperature);
+    seed("asstCfg", p.cfg_scale ?? d.cfg_scale);
+    seed("asstTopk", p.top_k ?? d.top_k);
+    seed("asstMaxFrames", p.max_frames ?? d.max_frames);
+    asstSeeded = true;
+  }
+  // When the server applies no explicit voice (p.voice null), fall back to the effective
+  // default voice for the CURRENT model (d.voice) so the dropdown selects what will actually
+  // play (e.g. en_oak) instead of the bare "default" option. d.voice is null for models with
+  // no served default (a backend exposing no preset voices), which correctly lands back
+  // on "default".
+  wantAsstVoice = p.voice ?? d.voice ?? "default";
+  if (asstVoicesLoaded) selectAsstVoice();                   // list already here: apply now; else fillAsstVoices applies it
+  lastApplied = {                                            // the confirmed baseline the dirty-check compares against
+    voice: wantAsstVoice,
+    temperature: parseFloat(p.temperature ?? d.temperature),
+    cfg_scale: parseFloat(p.cfg_scale ?? d.cfg_scale),
+    top_k: parseInt(p.top_k ?? d.top_k, 10),
+    max_frames: parseInt(p.max_frames ?? d.max_frames, 10),
+  };
+  refreshConfirm();
+}
+// Current control values in the same shape as lastApplied ("default" voice stays "default").
+function currentConfig() {
+  return {
+    voice: $("asstVoice").value || "default",
+    temperature: parseFloat($("asstTemp").value),
+    cfg_scale: parseFloat($("asstCfg").value),
+    top_k: parseInt($("asstTopk").value, 10),
+    max_frames: parseInt($("asstMaxFrames").value, 10),
+  };
+}
+function isDirty() {
+  if (!lastApplied) return false;
+  const c = currentConfig(), a = lastApplied;
+  return c.voice !== a.voice || c.temperature !== a.temperature || c.cfg_scale !== a.cfg_scale
+      || c.top_k !== a.top_k || c.max_frames !== a.max_frames;
+}
+// Gate the Confirm button on dirtiness and flag staged edits in the status caption.
+function refreshConfirm() {
+  const dirty = isDirty();
+  $("asstConfirm").disabled = !dirty;
+  if (dirty) $("asstStatus").textContent = "unsaved changes";
+}
+// Full assistant param set from the current controls; pass voice=null to use the server default voice.
+function currentAsstParams(voice) {
+  return {
+    type: "set_tts_params",
+    voice,
+    temperature: parseFloat($("asstTemp").value),
+    cfg_scale: parseFloat($("asstCfg").value),
+    top_k: parseInt($("asstTopk").value, 10),
+    max_frames: parseInt($("asstMaxFrames").value, 10),
+  };
+}
+// Confirm: apply the staged voice + params to the assistant. The tts_params echo updates the
+// baseline and re-runs refreshConfirm, returning the panel to a clean (disabled) state.
+$("asstConfirm").onclick = () => {
+  const v = $("asstVoice").value;
+  sendJson(currentAsstParams(v === "default" ? null : v));   // "default" option -> null (use server default voice)
+  $("asstConfirm").disabled = true;                          // optimistic: block a double-send until the echo lands
+  $("asstStatus").textContent = "applied ✓";
+  saveTts($("modelSelect").value, v, currentConfig());       // the controls ARE the applied config at Confirm time
+};
+// A control edit ONLY re-evaluates dirtiness; it never sends set_tts_params (Confirm does that).
+["asstVoice", "asstTemp", "asstCfg", "asstTopk", "asstMaxFrames"].forEach(id => {
+  $(id).addEventListener("input", refreshConfirm);
+  $(id).addEventListener("change", refreshConfirm);
+});
+
+// ---- VAD tuning (applied hot) ----
+$("vadToggle").onclick = () => { const p = $("vadpanel"); p.hidden = !p.hidden; $("vadToggle").classList.toggle("on", !p.hidden); if (!p.hidden) closeHistoryPanel(); };
+async function applyVadStructural() {
+  // threshold / segment-pause need a fresh VAD instance; swap it in place while
+  // the audio pipeline keeps running (no mic re-prompt, no gap).
+  if (listening) {
+    try { vad = await makeVad(); $("vadCfgStatus").textContent = "applied ✓"; }
+    catch (e) { $("vadCfgStatus").textContent = "⚠ " + e.message; }
+  } else {
+    $("vadCfgStatus").textContent = "will apply on Start";
+  }
+}
+// Each applied change also re-sends client_info: the saved capture metadata must describe the VAD
+// settings that actually produced the segments, not the ones in force when the socket opened.
+$("vadThresh").onchange = (e) => { vadThreshold = parseFloat(e.target.value); applyVadStructural(); saveVad(); sendClientInfo(); };
+$("vadSegMs").onchange = (e) => { vadMinSilenceFrames = Math.max(1, Math.round(parseFloat(e.target.value) / 10)); applyVadStructural(); saveVad(); sendClientInfo(); };
+$("vadTurnMs").onchange = (e) => { turnSilenceMs = parseInt(e.target.value, 10); $("vadCfgStatus").textContent = "applied ✓"; saveVad(); sendClientInfo(); };  // pure hot: next turn uses it
+
+// VAD persistence is pure client-side (no WS, so no server-desync risk). Save the
+// applied inputs (clamped to each control's range); restore them into BOTH the inputs
+// and the module vars makeVad reads. restoreVadConfig() must run before the first
+// makeVad() (on Start), since threshold + segment-pause are read at construction time.
+function saveVad() {
+  try {
+    localStorage.setItem(VAD_KEY, JSON.stringify({
+      threshold: clampNum($("vadThresh").value, 0.1, 0.9, 0.5),
+      segMs: Math.round(clampNum($("vadSegMs").value, 200, 1500, 600)),
+      turnMs: Math.round(clampNum($("vadTurnMs").value, 300, 3000, 900)),
+    }));
+  } catch {}
+}
+function restoreVadConfig() {
+  let o;
+  try { o = JSON.parse(localStorage.getItem(VAD_KEY) || "null"); } catch { return; }
+  if (!o || typeof o !== "object") return;
+  const thr = clampNum(o.threshold, 0.1, 0.9, vadThreshold);
+  const segMs = Math.round(clampNum(o.segMs, 200, 1500, 600));
+  const turnMs = Math.round(clampNum(o.turnMs, 300, 3000, turnSilenceMs));
+  vadThreshold = thr;
+  vadMinSilenceFrames = Math.max(1, Math.round(segMs / 10));   // same ms -> frames rule as the segment-pause handler
+  turnSilenceMs = turnMs;
+  $("vadThresh").value = thr; $("vadSegMs").value = segMs; $("vadTurnMs").value = turnMs;
+}
+restoreVadConfig();   // before any makeVad(): Start builds the VAD from the restored threshold + segment pause
+
+// ---- ASR hints: hotwords (bias FunASR) + replacements (post-ASR fixes), applied hot ----
+$("hintsToggle").onclick = () => { const p = $("hintspanel"); p.hidden = !p.hidden; $("hintsToggle").classList.toggle("on", !p.hidden); if (!p.hidden) { sendJson({ type: "get_hints" }); closeHistoryPanel(); } };
+function fillHints(m) {
+  $("hintsHot").value = (m.hotwords || []).join("\n");
+  $("hintsRep").value = Object.entries(m.replacements || {}).map(([k, v]) => `${k} = ${v}`).join("\n");
+  $("hintsStatus").textContent = `${(m.hotwords || []).length} hotwords, ${Object.keys(m.replacements || {}).length} replacements`;
+}
+$("hintsApply").onclick = () => {
+  const hotwords = $("hintsHot").value.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+  const replacements = {};
+  $("hintsRep").value.split("\n").forEach(line => {
+    const i = line.indexOf("=");
+    if (i > 0) { const k = line.slice(0, i).trim(); if (k) replacements[k] = line.slice(i + 1).trim(); }
+  });
+  sendJson({ type: "set_hints", hotwords, replacements });
+  $("hintsStatus").textContent = "applied ✓";
+};
+
+// ---- session history: list/select/rename/delete past sessions, live/history view toggle ----
+// A session's name is null until the user renames it or Claude auto-titles it on end; UNTITLED is
+// what we render in that null case so no read site ever shows the literal string "null".
+const UNTITLED = "Untitled";
+let currentSessionId = null;   // this connection's own live session id (from session_started)
+let liveSessionMeta = null;    // {id,number,name,started_at} of the live session; name may be null (unnamed)
+let selectedSessionId = null;  // the session id the transcript pane is currently showing
+let sessionsCache = [];        // last "sessions" reply, kept so a rename/delete echo can patch in place
+let deleteArmed = null;        // { btn, timer, outsideClick } for the two-click delete confirm
+let isOperator = false;        // operator connection (from session_started): unlocks owner labels + cross-scope targeting
+let sessionScope = "public";   // this connection's own scope (opaque hash or "public"); informational, kept for parity
+
+// Operators act across clients: each list row carries the owner's scope, which we thread back into
+// get/rename/delete so the op targets that client's scope. For a normal connection the rows have no
+// scope, so this yields {} and nothing extra is sent (unchanged behavior). Guarded on isOperator too.
+function scopeField(s) {
+  return (isOperator && s && typeof s.scope === "string") ? { scope: s.scope } : {};
+}
+
+function closeHistoryPanel() {
+  const hp = $("historypanel");
+  if (hp.hidden) return;
+  hp.hidden = true;
+  $("historyToggle").classList.remove("on");
+  $("historyToggle").setAttribute("aria-expanded", "false");
+}
+// STT/VAD/TTS stack freely among themselves; History is mutually exclusive with that whole group.
+function closeOtherPanels() {
+  [["hintsToggle", "hintspanel"], ["vadToggle", "vadpanel"], ["pgToggle", "playground"]].forEach(([btnId, panelId]) => {
+    const p = $(panelId);
+    if (p.hidden) return;
+    p.hidden = true;
+    $(btnId).classList.remove("on");
+    $(btnId).setAttribute("aria-expanded", "false");
+  });
+}
+
+function showLiveView() {
+  $("historyChat").hidden = true;
+  $("historyBanner").hidden = true;
+  $("chat").hidden = false;
+  selectedSessionId = currentSessionId;
+  highlightSelectedRow();
+  updatePendingStrip();   // back on the live view: re-show the strip if an action is still outstanding
+}
+
+function highlightSelectedRow() {
+  document.querySelectorAll("#sessionList .sess-row").forEach(row => {
+    row.classList.toggle("selected", row.dataset.id === selectedSessionId);
+  });
+}
+
+// started_at is ISO 8601 with a +08:00 offset, so Date parses it correctly regardless of the
+// viewer's own timezone; toLocaleString renders it in the viewer's local time.
+function fmtStarted(iso) {
+  const d = new Date(iso);
+  return isNaN(d) ? (iso || "") : d.toLocaleString();
+}
+
+function renderHistoryMessages(messages) {
+  const el = $("historyChat");
+  el.innerHTML = "";
+  (messages || []).forEach(msg => {
+    const row = makeMsg(msg.role === "user" ? "user" : "asst", el);
+    row._body.textContent = msg.content || "";
+  });
+}
+
+function renderSessions(sessions) {
+  if (deleteArmed) resetDeleteBtn(deleteArmed.btn);   // its row is about to be torn down
+  sessionsCache = sessions || [];
+  const list = $("sessionList");
+  list.innerHTML = "";
+  sessionsCache.forEach(s => list.appendChild(buildSessionRow(s)));
+  highlightSelectedRow();
+  // Ranks are positional and shift on delete: the server pushes a fresh "sessions" right after
+  // session_deleted, so a session we're viewing may have restacked. Repaint the open history banner
+  // from this list so its "#" cannot go stale. (If the viewed session was the one deleted,
+  // session_deleted already dropped us back to the live view and this branch is skipped.)
+  if (!$("historyChat").hidden && selectedSessionId) {
+    const cur = sessionsCache.find(s => s.id === selectedSessionId);
+    if (cur) $("historyBannerLabel").textContent = "Session " + cur.number + ": " + (cur.name || UNTITLED);
+  }
+}
+
+function buildSessionRow(s) {
+  const isLive = s.id === currentSessionId;
+  const row = document.createElement("div");
+  row.className = "sess-row";
+  row.dataset.id = s.id;
+
+  const num = document.createElement("span"); num.className = "sess-num"; num.textContent = "#" + s.number;
+  const name = document.createElement("span"); name.className = "sess-name"; name.textContent = s.name || UNTITLED;
+  row.appendChild(num); row.appendChild(name);
+  if (isOperator && s.owner != null) {   // operator-only: whose session this row is (email or "public")
+    const owner = document.createElement("span");
+    owner.className = "sess-owner"; owner.title = "Session owner"; owner.textContent = s.owner;
+    row.appendChild(owner);
+  }
+  if (isLive) {
+    const badge = document.createElement("span"); badge.className = "sess-badge"; badge.textContent = "Live";
+    row.appendChild(badge);
+  }
+  const time = document.createElement("span"); time.className = "sess-time"; time.textContent = fmtStarted(s.started_at);
+  row.appendChild(time);
+
+  const renameBtn = document.createElement("button");
+  renameBtn.className = "sess-btn"; renameBtn.title = "Rename"; renameBtn.textContent = "✎";
+  renameBtn.onclick = () => startRename(row, s);
+  row.appendChild(renameBtn);
+
+  if (!isLive) {   // the live session can't be deleted (server rejects it too); don't even offer it
+    const delBtn = document.createElement("button");
+    delBtn.className = "sess-btn"; delBtn.title = "Delete"; delBtn.textContent = "✕";
+    delBtn.onclick = () => armDelete(delBtn, s);   // pass the row so operator delete can thread its scope
+    row.appendChild(delBtn);
+  }
+
+  row.onclick = (e) => { if (e.target.closest("input, button")) return; selectRow(s); };
+  return row;
+}
+
+function selectRow(s) {
+  if (s.id === currentSessionId) { showLiveView(); return; }
+  sendJson({ type: "get_session", id: s.id, ...scopeField(s) });   // view swap waits for session_data, no optimistic switch
+}
+
+function startRename(row, s) {
+  const nameEl = row.querySelector(".sess-name");
+  const input = document.createElement("input");
+  // Seed with "" (not UNTITLED) for a never-named session so the user types a fresh name into an
+  // empty field instead of first deleting the placeholder word. An empty commit is still rejected
+  // below (val is falsy), so the fallback string is never sent back to the server as a name.
+  input.type = "text"; input.className = "sess-rename-input"; input.value = s.name || "";
+  nameEl.replaceWith(input);
+  input.focus(); input.select();
+  let done = false;   // guards Enter/Escape/blur firing more than once for the same edit
+  const finish = (commit) => {
+    if (done) return;
+    done = true;
+    input.replaceWith(nameEl);
+    if (commit) {
+      const val = input.value.trim();
+      if (val && val !== s.name) sendJson({ type: "rename_session", id: s.id, name: val, ...scopeField(s) });
+    }
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); finish(true); }
+    else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener("blur", () => finish(true));
+}
+
+// Two-click arm/confirm delete, no native confirm(): first click arms (relabels + starts a 3s
+// window), a second click on the SAME button within that window actually deletes; a timeout,
+// a click elsewhere, or arming a different row's delete button all revert it silently.
+function armDelete(btn, s) {
+  if (btn.dataset.armed === "1") {
+    resetDeleteBtn(btn);
+    sendJson({ type: "delete_session", id: s.id, ...scopeField(s) });
+    return;
+  }
+  if (deleteArmed) resetDeleteBtn(deleteArmed.btn);
+  btn.dataset.armed = "1";
+  btn.textContent = "Confirm?";
+  btn.classList.add("armed");
+  const timer = setTimeout(() => resetDeleteBtn(btn), 3000);
+  const outsideClick = (e) => { if (e.target !== btn) resetDeleteBtn(btn); };
+  document.addEventListener("click", outsideClick, true);
+  deleteArmed = { btn, timer, outsideClick };
+}
+function resetDeleteBtn(btn) {
+  if (!deleteArmed || deleteArmed.btn !== btn) return;
+  clearTimeout(deleteArmed.timer);
+  document.removeEventListener("click", deleteArmed.outsideClick, true);
+  btn.dataset.armed = "0";
+  btn.textContent = "✕";
+  btn.classList.remove("armed");
+  deleteArmed = null;
+}
+
+function updateSessionName(id, name) {
+  const s = sessionsCache.find(x => x.id === id);
+  if (s) s.name = name;
+  document.querySelectorAll("#sessionList .sess-row").forEach(row => {
+    if (row.dataset.id === id) { const nameEl = row.querySelector(".sess-name"); if (nameEl) nameEl.textContent = name || UNTITLED; }
+  });
+  if (id === selectedSessionId && !$("historyChat").hidden) {
+    $("historyBannerLabel").textContent = "Session " + (s ? s.number : "") + ": " + (name || UNTITLED);
+  }
+}
+
+$("historyToggle").onclick = () => {
+  const p = $("historypanel");
+  p.hidden = !p.hidden;
+  $("historyToggle").classList.toggle("on", !p.hidden);
+  if (!p.hidden) { closeOtherPanels(); sendJson({ type: "list_sessions" }); }   // always refetch: sessions can change elsewhere
+};
+$("backToLive").onclick = showLiveView;
+
+// ---- theme (dark/light) toggle: presentational only, no WS involvement ----
+// The pre-paint inline snippet in <head> already applied the saved / OS-preferred theme; here we
+// only wire the toggle and persist the choice. The button shows a split black/white sun icon whose
+// two halves read from CSS variables the light and dark blocks swap, so the icon flips with the
+// data-theme attribute (no JS re-labelling needed); syncThemeTitle keeps only the tooltip in step.
+function currentTheme() { return document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark"; }
+function syncThemeTitle(theme) {
+  $("themeToggle").title = "Switch to the " + (theme === "dark" ? "light" : "dark") + " theme";
+}
+function setTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+  try { localStorage.setItem("theme", theme); } catch {}
+  syncThemeTitle(theme);
+}
+$("themeToggle").onclick = () => setTheme(currentTheme() === "dark" ? "light" : "dark");
+syncThemeTitle(currentTheme());   // align the tooltip with the theme applied before first paint
+
+$("mic").onclick = () => (listening ? stop() : start());
+$("clear").onclick = () => {
+  showLiveView();   // a fresh live session should always be visible, not a stale historical view
+  chatEl.innerHTML = ""; curUser = null; curAsst = null; clearTimeout(turnTimer); turnTimer = null; stopAudio();
+  stopAnnounceAudio();   // and hush any announcement / drop a held info clip
+  clearPending();   // a fresh session starts with no outstanding action
+  clearSegLabels();   // the rows those labels belonged to were just torn out of the DOM
+  breakDropRun();     // a fresh session starts with no open drop aggregate
+  sendJson({ type: "new_session" });
+};
+
+// ---- keep the transcript pinned to the newest message across layout reflow ----
+// Track whether the viewer is at the bottom (updated on their own scrolls), then re-pin
+// after any change that resizes #chat: device rotation (window resize) and a config panel
+// opening/closing (which grows/shrinks the drawer, caught by the ResizeObserver). Pure
+// presentation; reuses the existing atBottom()/scroll() helpers and touches no handler.
+let stuckBottom = true;
+chatEl.addEventListener("scroll", () => { stuckBottom = atBottom(); });
+function repin() { if (stuckBottom) scroll(); }
+window.addEventListener("resize", repin);
+if (window.ResizeObserver) new ResizeObserver(repin).observe(chatEl);
+
+// aria: mirror each config toggle's open state for assistive tech. A separate click listener
+// (registered after the existing onclick, so it runs after the panel's [hidden] has flipped)
+// keeps the panel toggle handlers themselves untouched.
+[["hintsToggle", "hintspanel"], ["vadToggle", "vadpanel"], ["pgToggle", "playground"], ["historyToggle", "historypanel"]].forEach(([btnId, panelId]) => {
+  const b = $(btnId);
+  b.setAttribute("aria-controls", panelId);
+  b.setAttribute("aria-expanded", String(!$(panelId).hidden));
+  b.addEventListener("click", () => b.setAttribute("aria-expanded", String(!$(panelId).hidden)));
+});
+
+// help card fold: defaults to folded on narrow/portrait (limited phone space), shown on
+// landscape-wide, computed once at load. Session-only, not persisted or resize-reactive,
+// independent of the panel-open auto-hide rule above.
+let helpFolded = !window.matchMedia("(orientation: landscape) and (min-width:768px)").matches;
+function applyHelpFold() {
+  $("config").classList.toggle("help-folded", helpFolded);
+  $("helpToggle").classList.toggle("on", !helpFolded);
+  $("helpToggle").setAttribute("aria-expanded", String(!helpFolded));
+}
+$("helpToggle").setAttribute("aria-controls", "confighelp");
+applyHelpFold();
+$("helpToggle").onclick = () => { helpFolded = !helpFolded; applyHelpFold(); };
+
+// ---- email gate wiring + boot ----
+// The overlay covers the whole app (opaque, z-index above everything) until a successful connect,
+// so nothing behind it is usable. It stays visible on load when there is no chosen identity.
+function showAuthGate(errMsg) {
+  $("authError").textContent = errMsg || "";
+  $("authGate").hidden = false;
+  $("authWho").hidden = true; $("authSignout").hidden = true;   // not signed in while the gate is up
+  try { $("authEmail").focus(); } catch {}
+}
+function hideAuthGate() { $("authGate").hidden = true; }
+// Reveal the sign-out control on a live connection; show "signed in as X" only for a real email
+// (never for public/skip, and nowhere else, per the no-logging rule).
+function revealSignedIn() {
+  $("authSignout").hidden = false;
+  $("authWho").hidden = !authedEmail;
+  $("authWho").textContent = authedEmail ? "signed in as " + authedEmail : "";
+}
+// A rejected identity: clear the stored email, drop any live capture, and re-show the gate with the
+// reason. Guarded so we never spin: onclose will not reconnect while authRejected is set.
+function rejectAuth(reason) {
+  authRejected = true;
+  clearStoredEmail();
+  if (listening) { try { stop(); } catch {} }
+  $("mic").disabled = true;
+  showAuthGate(authErrorMessage(reason));
+}
+function submitEmail() {
+  const email = normalizeEmail($("authEmail").value);
+  if (!isValidEmail(email)) { $("authError").textContent = "Please enter a valid email (name@example.com)."; return; }
+  saveEmail(email); authedEmail = email; authRejected = false;
+  hideAuthGate(); connect();
+}
+$("authContinue").onclick = submitEmail;
+$("authEmail").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submitEmail(); } });
+$("authSignout").onclick = () => { clearStoredEmail(); location.reload(); };   // reload guarantees a clean gate + no live mic
+
+// Boot: connect straight away with a valid stored email; otherwise show the gate (no public path).
+(function boot() {
+  const stored = loadEmail();
+  if (stored === null) { showAuthGate(""); return; }
+  authedEmail = stored;
+  hideAuthGate();
+  connect();
+})();
+</script>
+</body>
+</html>

@@ -199,6 +199,12 @@
   .voice-caption{color:var(--dim);font-size:11.5px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .voice-caption.refused{color:var(--amber)}
   #mic.on{background:var(--cyan);color:#04222a;border-color:var(--cyan);font-weight:600}
+  /* Icon-only buttons: equal squares, so the emoji is the whole control rather than a
+     decoration in front of a word. The emoji needs a bigger size and no letter-spacing,
+     which the text .btn rule imposes. */
+  .btn.icon{padding:0;width:34px;height:31px;font-size:15px;line-height:1;letter-spacing:0;
+            display:inline-flex;align-items:center;justify-content:center}
+  #spk.on{background:var(--cyan);color:#04222a;border-color:var(--cyan)}
 
   /* ---------- voice settings drawer (additive) ---------- */
   .drawer-scrim{position:fixed;inset:0;background:rgba(4,6,10,.55);opacity:0;pointer-events:none;transition:opacity .2s ease;z-index:40}
@@ -274,9 +280,11 @@
       <div class="body" id="convo"><div class="empty">Press <b>Next turn</b> to run the scenario, or switch to Live and type a request.</div></div>
       <div class="composer">
         <input id="input" placeholder="Speak or type a request…" disabled>
-        <button class="btn" id="mic" title="Toggle voice input (Live mode)">🎙 Voice</button>
-        <button class="btn" id="spk" title="Speak the agent's replies aloud. Works in Demo too: the mic drives the real backend, but the voice can read a scripted demo turn just as well.">🔊 Speak</button>
-        <button class="btn" id="voiceGear" title="Voice settings">⚙</button>
+        <!-- Icon-only. The tooltips carry the meaning, and aria-label carries it for a
+             screen reader, which an emoji on its own does not. -->
+        <button class="btn icon" id="mic" title="Voice input (Live mode)" aria-label="Voice input">🎙️</button>
+        <button class="btn icon" id="spk" title="Speak the agent's replies aloud. Works in Demo too." aria-label="Speak replies">🔊</button>
+        <button class="btn icon" id="voiceGear" title="Voice settings" aria-label="Voice settings">⚙️</button>
         <button class="btn" id="send" disabled>Send</button>
       </div>
       <div class="voice-bar" id="voiceBar" style="display:none">
@@ -413,12 +421,16 @@
         <span class="dlabel">Voice</span>
         <select id="vVoice" class="dselect"><option value="">Loading voices…</option></select>
       </label>
-      <!-- Generation params are PINNED (temperature 0.15, cfg 1.0, top-k 0), which is
-           what the server defaults to and what these voices were tuned against. They are
-           not exposed: gepard is autoregressive, so a higher temperature does not make it
-           more expressive, it makes it more likely to hallucinate a syllable or drift
-           mid-sentence, and a demo is the worst place to discover that. Voice is the one
-           choice worth making here. -->
+      <!-- Temperature is the ONE generation param exposed. cfg_scale (1.0) and top_k (0)
+           stay pinned, and gepard's repetition_penalty / repetition_window are left at the
+           library defaults (1.0 / 32, i.e. the penalty is off).
+           gepard is autoregressive: raising this does not buy expressiveness, it buys a
+           chance of a hallucinated syllable or a drift mid-sentence. 0.15 is what the
+           voices were tuned against. Turn it up only while auditioning. -->
+      <label class="dfield" title="Sampling temperature. Higher is more varied and less stable: gepard can stammer or drift. 0.15 is the tuned default.">
+        <span class="dlabel">Temperature <b id="vTempVal">0.15</b><span class="ddefault">def 0.15</span></span>
+        <input type="range" id="vTemp" min="0" max="1" step="0.05" value="0.15">
+      </label>
       <div class="dfield" style="display:flex;gap:7px;align-items:center">
         <input type="text" id="vTestLine" class="dtext" style="flex:1" value="Protocol compiled, awaiting your confirmation.">
         <button class="btn play" id="vTestVoice">▶ Speak</button>
@@ -1018,7 +1030,7 @@ setScenario('elisa');
   };
 
   /* ---- 3. Text-to-speech ---- */
-  const vVoice = $('vVoice');
+  const vVoice = $('vVoice'), vTemp = $('vTemp'), vTempVal = $('vTempVal');
   const savedTts = loadSettings().tts || {};
 
   // The voice list comes from the server, so it can only be fetched once the socket is
@@ -1049,26 +1061,27 @@ setScenario('elisa');
   // and leaves a rejected request behind that poisons the retry. It is called once, after
   // connect(), at the bottom of this block.
 
-  // Generation params are PINNED, and sent EXPLICITLY rather than omitted. Omitting them
-  // would not give us these values: the orchestrator drops unset params so the TTS backend
-  // applies its OWN defaults, which are not these. Voice is the only choice the drawer
-  // offers.
-  //
-  // gepard is autoregressive, so a higher temperature does not buy expressiveness, it buys
-  // a chance of a hallucinated syllable or a drift mid-sentence, and a live demo is the
-  // worst possible place to find that out. 0.15 / 1.0 / 0 is what the voices were tuned
-  // against. (The sliders that used to live here defaulted to 0.7 / 1.5 / 50, so merely
-  // opening the drawer would have quietly made every reply less stable than intended.)
-  const TTS_PINNED = { temperature: 0.15, cfg_scale: 1.0, top_k: 0 };
+  // cfg_scale and top_k stay PINNED, and every param is sent EXPLICITLY rather than
+  // omitted: the orchestrator drops unset params so the TTS backend applies its OWN
+  // defaults, which are not these. Voice and temperature are the only two the drawer
+  // offers; gepard's repetition_penalty / repetition_window are not exposed at all and sit
+  // at the library defaults (1.0 / 32, so the penalty is off).
+  const TTS_PINNED = { cfg_scale: 1.0, top_k: 0 };
+  const TEMP_DEFAULT = 0.15;
+
+  if (savedTts.temperature != null) vTemp.value = savedTts.temperature;
+  vTempVal.textContent = Number(vTemp.value).toFixed(2);
 
   function applyTts(){
-    const params = Object.assign({ voice: vVoice.value }, TTS_PINNED);
+    const temperature = Number(vTemp.value);
+    const params = Object.assign({ voice: vVoice.value, temperature }, TTS_PINNED);
     if (typeof vw.setTtsParams === 'function'){
       try { vw.setTtsParams(params); } catch (e) { console.warn('[voice-settings] setTtsParams failed:', e); }
     }
-    saveSettings({ tts: { voice: vVoice.value } });   // only the voice is user state
+    saveSettings({ tts: { voice: vVoice.value, temperature } });
   }
   vVoice.onchange = applyTts;
+  vTemp.oninput = () => { vTempVal.textContent = Number(vTemp.value).toFixed(2); applyTts(); };
 
   $('vTestVoice').onclick = () => {
     const text = $('vTestLine').value.trim() || 'Protocol compiled, awaiting your confirmation.';

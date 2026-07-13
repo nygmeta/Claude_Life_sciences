@@ -152,7 +152,7 @@ Env:
   LA_TTS_CFG        1.0    the tts_params `defaults` so its controls can seed;
   LA_TTS_TOPK       0      a per-session set_tts_params overrides them, and any
   LA_TTS_MAXFRAMES  1075   field left unset falls through to the TTS backend default.)
-  LA_TTS_VOICE      en_oak  (default assistant reference voice. Substituted at synth
+  LA_TTS_VOICE      nurisa  (default assistant reference voice. Substituted at synth
                         time when the session's voice is unset AND the turn uses the
                         default model (gepard-1.0); other models keep their own
                         default voice, since this name is a gepard speaker.)
@@ -276,7 +276,7 @@ DEF_MAXFRAMES = int(os.environ.get("LA_TTS_MAXFRAMES", "1075"))
 # Default assistant reference voice, substituted at synth time only when the
 # session left the voice unset AND the turn uses the default model (gepard-1.0);
 # DEF_VOICE is a gepard speaker name, so other models keep their own default.
-DEF_VOICE = (os.environ.get("LA_TTS_VOICE") or "en_oak").strip()
+DEF_VOICE = (os.environ.get("LA_TTS_VOICE") or "nurisa").strip()
 
 SYSTEM_PROMPT = (
     "You are a helpful, friendly voice assistant. The user speaks to you and hears "

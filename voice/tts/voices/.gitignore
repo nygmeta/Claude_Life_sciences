@@ -1,0 +1,9 @@
+# Runtime voice artifacts. The 18 preset voices are binary and fetched at deploy time
+# by tts/fetch_voices.py (from the public gepard HuggingFace Space), so they are not
+# committed. The one exception is default.pt, the pinned reference voice: regenerating
+# it re-rolls the speaker, so the demo voice ships with the repo.
+*.pt
+!default.pt
+
+# Keep this dir tracked even though its other .pt contents are ignored.
+!.gitkeep

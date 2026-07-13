@@ -1,0 +1,22 @@
+# Gepard-1.0 reference PyTorch inference deps.
+#
+# INSTALL ORDER IS LOAD-BEARING (see deploy/setup-tts.sh):
+#   1. these base deps          (nemo pulls transformers<=4.52 as a dep)
+#   2. force transformers==5.3.0 + numpy<2.0   (gepard needs the Qwen3.5 backbone)
+#   3. gepard_inference from git
+#
+# torch / torchaudio are installed explicitly by deploy/setup-tts.sh BEFORE this file,
+# from the cu128 wheel index (LA_TORCH_SPEC / LA_TORCH_INDEX in deploy/env.sh), because
+# cu128 is the channel that carries the sm_120 kernels. Do NOT pin torch here: this
+# file resolves against the default index and would pull a wheel without them.
+nemo-toolkit[tts]==2.4.0
+safetensors
+librosa>=0.10.0
+soundfile
+omegaconf
+pyyaml
+numpy<2.0
+fastapi
+uvicorn
+pydantic
+huggingface_hub

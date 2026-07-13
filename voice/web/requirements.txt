@@ -1,0 +1,10 @@
+# Orchestrator / web server deps (no torch: this venv is light).
+websockets
+anthropic
+openai
+httpx
+
+# Used by web/mock_asr_tts.py, which stands in for the GPU services so the whole
+# pipeline (and scripts/run_local_smoke.sh) runs on a laptop with no GPU.
+numpy
+soundfile

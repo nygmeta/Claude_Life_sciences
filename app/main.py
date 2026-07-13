@@ -31,6 +31,8 @@ from app.adapters.opentrons_adapter import OpentronsAdapter
 from app.adapters.echo_adapter import EchoAdapter
 from app.agent import clarify, planner
 from app.compiler.plan_to_ops import compile_plan
+from app.hardware import direct_intents
+from app.hardware.ot2_client import OT2Error
 from app.models.plan import Intent
 from app.models.session import (
     MessageRequest, MessageResponse, Session, SessionState,
@@ -161,6 +163,16 @@ def message(req: MessageRequest, adapter: str = "opentrons") -> MessageResponse:
     session.log_turn("scientist", req.transcript)
     active = ADAPTERS[adapter]
 
+    # Direct hardware intents (home the robot, lights, health) bypass the SOP
+    # planner and hit the OT-2 HTTP API. Only intercept when no plan is under
+    # negotiation: a "yes" during SOP awaiting_confirmation must NOT be re-read
+    # as a direct command, and a mid-clarification transcript belongs to the
+    # SOP flow.
+    if session.state in (SessionState.idle, SessionState.executed):
+        intent = direct_intents.match(req.transcript)
+        if intent is not None:
+            return _handle_direct(session, intent)
+
     # --- Route by current state -------------------------------------------- #
     if session.state == SessionState.awaiting_confirmation:
         return _handle_confirmation(session, req.transcript, active)
@@ -173,6 +185,25 @@ def message(req: MessageRequest, adapter: str = "opentrons") -> MessageResponse:
 
 
 # --------------------------------------------------------------------------- #
+def _handle_direct(session: Session, intent: str) -> MessageResponse:
+    """Direct-to-robot bypass. Fires immediately on a matched final transcript;
+    trades the two-turn confirmation gate for latency. Read-only intents (lights,
+    health) never had a gate; motion intents (home, rerun) rely on ASR finality
+    and the operator not saying the phrase unless they mean it."""
+    try:
+        result = direct_intents.execute(intent)
+    except OT2Error as e:
+        session.audit("direct_hardware_error", {"intent": intent, "error": str(e)})
+        return _respond(
+            session,
+            f"I could not reach the Opentrons: {e}. "
+            f"Check that the robot is powered on and on the same network.",
+        )
+    session.audit("direct_hardware", {"action": result.action, "detail": result.detail})
+    session.state = SessionState.idle
+    return _respond(session, result.reply)
+
+
 def _handle_new_request(session: Session, transcript: str, adapter) -> MessageResponse:
     plan = planner.plan_from_transcript(transcript)
     session.plan = plan

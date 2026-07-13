@@ -113,14 +113,8 @@ The membership test is `w in t` on the raw string, so it matches **inside words*
 **Why it matters here and not before:** this is a *text-matching* bug, not a mishearing one, so nothing on the voice side protects against it. The ASR confidence floor cannot help: the transcript is perfectly correct, and it is the matcher that misreads it.
 
 **Two directions of failure:**
-- **False CANCEL** (the demo-breaker): the scientist confirms, the system abandons the
-  protocol. It fails safe, but on camera it looks broken.
-- **False EXECUTE** (the safety one): any utterance containing the substring `"go"`
-  reads as an affirmative. `"sounds good"`, `"let me go grab it"`, `"good, that's what
-  I forgot"` all contain it. In a room where the mic hears everything, an offhand
-  remark can look like sign-off. (The voice half's addressed-speech gate and confidence
-  floor reduce the exposure, but they are not designed to be the last line of defense
-  against a matcher that says "good" means "go".)
+- **False CANCEL** (the demo-breaker): the scientist confirms, the system abandons the protocol. It fails safe, but on camera it looks broken.
+- **False EXECUTE** (the safety one): any utterance containing the substring `"go"` reads as an affirmative. `"sounds good"`, `"let me go grab it"`, `"good, that's what I forgot"` all contain it. In a room where the mic hears everything, an offhand remark can look like sign-off. (The voice half's addressed-speech gate and confidence floor reduce the exposure, but they are not designed to be the last line of defense against a matcher that says "good" means "go".)
 
 **Proposed fix:** match on whole words, not substrings, and check the affirmative intent explicitly rather than by exclusion. The voice half already has exactly this, tested, in `voice/web/lab_gate.py`:
 
@@ -176,13 +170,8 @@ Then the validator could, for example, treat a low-confidence transcript as a re
 
 Neither of these affects the demo. Recording them so they are not forgotten.
 
-- **CORS is wide open.** `app/main.py` sets `allow_origins=["*"]`, which the code's own
-  comment already flags ("Fine for a hackathon / local demo; tighten allow_origins
-  before any real deployment"). Agreed, and no action needed for the demo.
-- **Sessions are an unbounded in-process dict.** `SESSIONS: dict[str, Session] = {}` has
-  no expiry and no cap, so a long-running server accumulates every session forever, and
-  all state is lost on restart. Fine for a demo; a real deployment wants a TTL or a
-  store.
+- **CORS is wide open.** `app/main.py` sets `allow_origins=["*"]`, which the code's own comment already flags ("Fine for a hackathon / local demo; tighten allow_origins before any real deployment"). Agreed, and no action needed for the demo.
+- **Sessions are an unbounded in-process dict.** `SESSIONS: dict[str, Session] = {}` has no expiry and no cap, so a long-running server accumulates every session forever, and all state is lost on restart. Fine for a demo; a real deployment wants a TTL or a store.
 
 ---
 
@@ -191,14 +180,11 @@ Neither of these affects the demo. Recording them so they are not forgotten.
 Recorded so the ask stays small and the backend side is not sent on unnecessary work. The seam is already green end to end (7/7 scenarios, `voice/scripts/smoke_integration.py`) against the backend's code **exactly as it is today**:
 
 - The Lab Agent API is unchanged and needs no changes for the integration to work.
-- The voice half adapts to the backend's contract (transcript in, `reply` out), pins
-  one backend session per voice session, and keeps speech-side safety on its own side.
-- P1 is the only item that will visibly bite during a recorded demo. Everything else is
-  a design conversation or a post-hackathon cleanup.
+- The voice half adapts to the backend's contract (transcript in, `reply` out), pins one backend session per voice session, and keeps speech-side safety on its own side.
+- P1 is the only item that will visibly bite during a recorded demo. Everything else is a design conversation or a post-hackathon cleanup.
 
 ## Suggested order of business
 
-1. **P1**, before recording. It is a small, contained fix (word boundaries), and without
-   it a natural spoken confirmation cancels the protocol on camera.
+1. **P1**, before recording. It is a small, contained fix (word boundaries), and without it a natural spoken confirmation cancels the protocol on camera.
 2. **P2**, a short conversation: is an intent-bound confirmation wanted for voice?
 3. **P3** and **P4** are optional and can wait.

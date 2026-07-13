@@ -148,7 +148,7 @@ Env:
                         = off, restoring the turn-boundary reply flow exactly)
   LA_SPEC_MAX_TURN_S 12  (skip speculation once the turn has run this long: a dictation
                         guard, so a long monologue does not refire the LLM per segment)
-  LA_TTS_TEMP       0.15  (default TTS generation params. Sent to the client as
+  LA_TTS_TEMP       0.3   (default TTS generation params. Sent to the client as
   LA_TTS_CFG        1.0    the tts_params `defaults` so its controls can seed;
   LA_TTS_TOPK       0      a per-session set_tts_params overrides them, and any
   LA_TTS_MAXFRAMES  1075   field left unset falls through to the TTS backend default.)
@@ -269,7 +269,7 @@ SAMPLE_RATE = 16000
 # message) so its controls can seed. A per-session set_tts_params overrides these,
 # and any param left unset (None) is omitted at synth time so the TTS backend
 # applies its own default. Same env names/defaults the TTS service reads.
-DEF_TEMP = float(os.environ.get("LA_TTS_TEMP", "0.15"))
+DEF_TEMP = float(os.environ.get("LA_TTS_TEMP", "0.3"))
 DEF_CFG = float(os.environ.get("LA_TTS_CFG", "1.0"))
 DEF_TOPK = int(os.environ.get("LA_TTS_TOPK", "0"))
 DEF_MAXFRAMES = int(os.environ.get("LA_TTS_MAXFRAMES", "1075"))

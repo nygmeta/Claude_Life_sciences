@@ -100,7 +100,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tts", default="http://127.0.0.1:8040")
     ap.add_argument("--voice", default="nurisa")
-    ap.add_argument("--temperature", type=float, default=0.15)
+    # Keep in step with the server's DEF_TEMP / DEF_VOICE. If these drift, Demo and Live
+    # stop sounding like the same assistant, which is worse than either value alone.
+    ap.add_argument("--temperature", type=float, default=0.3)
     ap.add_argument("--cfg_scale", type=float, default=1.0)
     ap.add_argument("--top_k", type=int, default=0)
     ap.add_argument("--force", action="store_true",

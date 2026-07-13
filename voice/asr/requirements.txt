@@ -1,0 +1,13 @@
+# Fun-ASR-Nano API server deps (installed into an isolated venv on the GPU pod).
+# NOTE: install a CUDA torch build that matches the VM's driver FIRST (deploy.sh
+# does this via the cuXXX wheel index), then these. funasr pulls torch as a dep
+# but we want the CUDA wheel, not the default CPU one.
+funasr>=1.2.0
+modelscope
+huggingface_hub
+fastapi
+uvicorn[standard]
+python-multipart
+# funasr runtime deps that are sometimes not pulled transitively:
+soundfile
+librosa

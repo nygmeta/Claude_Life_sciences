@@ -215,10 +215,12 @@ try:                       # imported as the `web.server` module (tests)
     from web import addressed as addressed_mod
     from web import lab_backend
     from web import lab_gate
+    from web import speakable
 except ImportError:        # run directly as web/server.py (local smoke)
     import addressed as addressed_mod
     import lab_backend
     import lab_gate
+    import speakable
 
 WS_HOST = os.environ.get("LA_WS_HOST", "0.0.0.0")
 WS_PORT = int(os.environ.get("LA_WS_PORT", "8765"))
@@ -785,7 +787,13 @@ def _tts_base_url(model: str | None) -> str:
 
 
 async def synthesize(text: str, model: str | None = None, **params) -> bytes:
-    body = {"text": text}
+    # The ONE place text becomes audio, so the ONE place to make it speakable. gepard
+    # says "ee-gee" for "e.g.", "ill six" for "IL-6", "you-ell" for "uL", and reads the
+    # underscore in "assay_plate" out loud. Every synth path funnels through here (the
+    # streaming reply consumer, the playground, announcements, the console's speak), so
+    # normalizing here means nothing spoken can bypass it, and NOTHING DISPLAYED is
+    # touched: the reader still sees "IL-6", only the speaker hears "I L 6".
+    body = {"text": speakable.to_speakable(text)}
     body.update({k: v for k, v in params.items() if v is not None})
     r = await tts_client.post(f"{_tts_base_url(model)}/synthesize", json=body)
     r.raise_for_status()

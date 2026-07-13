@@ -21,6 +21,7 @@ Voice pipeline → Lab Agent API → Workflow IR → adapter → simulation.
 """
 from __future__ import annotations
 
+import re
 import uuid
 
 from fastapi import FastAPI, HTTPException
@@ -50,8 +51,41 @@ app.add_middleware(
 SESSIONS: dict[str, Session] = {}
 ADAPTERS = {"opentrons": OpentronsAdapter(), "echo": EchoAdapter()}
 
-_AFFIRMATIVE = {"yes", "confirm", "confirmed", "go", "proceed", "do it", "run it", "correct"}
-_NEGATIVE = {"no", "cancel", "stop", "abort", "wait"}
+# Word-anchored on purpose: a plain substring test here once let "yesterday" (contains
+# "yes") execute a pending plan, and "going" / "that's not correct" had the same failure
+# mode. Never loosen these back to `word in t`.
+_CONFIRM_RE = re.compile(r"\b(yes|confirm|confirmed|go ahead|proceed|do it|run it)\b", re.I)
+_CANCEL_RE = re.compile(r"\b(no|cancel|stop|abort|wait|never mind|nevermind)\b", re.I)
+
+# A confirmation may not carry NEW CONTENT: "run it" is sign-off, "run it on yesterday's
+# samples" is a fresh instruction and must reach clarification instead of the robot.
+# So an affirmative also has to be *bare*: everything left over once the affirmative
+# phrase is removed must be filler, or a word from the plan the scientist is confirming.
+# Anything unrecognised counts as content, which fails safe toward re-asking.
+_CONFIRM_FILLERS = {
+    "please", "now", "just", "right", "ok", "okay", "alright", "then", "and", "so",
+    "the", "a", "an", "that", "this", "it", "all", "lets", "let's", "we", "i", "you",
+    "thanks", "run",
+}
+_WORD_RE = re.compile(r"[a-z']+")
+
+
+def _plan_words(plan) -> set[str]:
+    """Words naming the plan under confirmation, so "confirm ELISA" and "yes, run the
+    ELISA" stay bare sign-offs rather than reading as new instructions."""
+    if plan is None:
+        return set()
+    src = f"{plan.intent.value if plan.intent else ''} {plan.sop_id or ''}"
+    return set(_WORD_RE.findall(src.lower()))
+
+
+def _is_bare_affirmative(t: str, plan) -> bool:
+    """True only for a confirmation that adds nothing to the plan."""
+    if not _CONFIRM_RE.search(t):
+        return False
+    residue = _CONFIRM_RE.sub(" ", t)
+    allowed = _CONFIRM_FILLERS | _plan_words(plan)
+    return not [w for w in _WORD_RE.findall(residue) if w not in allowed]
 
 
 def _label(wf) -> str:
@@ -168,11 +202,11 @@ def _handle_followup(session: Session, transcript: str, adapter) -> MessageRespo
 
 def _handle_confirmation(session: Session, transcript: str, adapter) -> MessageResponse:
     t = transcript.strip().lower()
-    if any(w in t for w in _NEGATIVE):
+    if _CANCEL_RE.search(t):
         session.state = SessionState.idle
         return _respond(session, "Cancelled. Nothing was executed. What would you like to do?")
 
-    if not any(w in t for w in _AFFIRMATIVE):
+    if not _is_bare_affirmative(t, session.plan):
         # Treat as a late correction, e.g. "actually make it 100 uL per well".
         answers = clarify.parse_answers(session.plan, transcript)
         if answers:

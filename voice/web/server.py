@@ -1599,7 +1599,7 @@ async def _backend_producer(ws, queue: "asyncio.Queue", commit: dict, partial_ch
     blocked = False
     try:
         prob_mean = _turn_prob_mean(asr_rec)
-        if lab_backend.blocks_confirmation(backend.state, prob_mean):
+        if lab_backend.blocks_confirmation(backend.state, prob_mean, text=user_text):
             # Do not POST. The backend is armed and we are not sure what was said.
             blocked = True
             text = lab_backend.REPROMPT
@@ -3332,7 +3332,7 @@ async def handle_end_turn_speech(ws, sess: Session):
     # belongs to it alone: nothing below may reinterpret a turn it has refused, and an
     # outstanding proposal does not survive a refusal (we are no longer sure enough
     # about anything to be asking a follow-up question).
-    if lab_backend.blocks_confirmation(sess.lab_state, prob_mean):
+    if lab_backend.blocks_confirmation(sess.lab_state, prob_mean, text=user_text):
         sess.pending_verify = None
         await send(ws, type="transcript_refused", reason="low_confidence_confirmation",
                    prob_mean=prob_mean, reprompt=lab_backend.REPROMPT)

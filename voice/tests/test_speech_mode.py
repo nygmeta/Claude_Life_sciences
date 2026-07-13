@@ -212,16 +212,27 @@ def test_armed_confirm_exactly_at_the_floor_is_accepted():
     assert "transcript_refused" not in _types(ws)
 
 
-# --------------------------------------------- (d) missing confidence fails OPEN
-def test_missing_confidence_fails_open_and_is_accepted():
-    # The mock ASR and a degraded-but-working real one both supply no confidence.
-    # Locking them out of confirming would break the demo, so the floor only bites
-    # when we HAVE a number and it is low.
+# ------------------------------------------- (d) missing confidence fails CLOSED
+# SPEC CHANGE (was: fails OPEN, accepted). An armed backend's next affirmative starts a
+# machine, so an utterance we have NO acoustic evidence for must not be forwarded: it is
+# re-prompted instead. This matches the local gate's escalate-on-None rule, which the
+# standalone landed under review for the same reason. The old test justified the fail-open
+# by claiming the mock ASR supplies no confidence; that was false (mock_asr_tts._conf_block
+# emits a confidence block on every response), so nothing in the demo path relied on it.
+def test_missing_confidence_fails_closed_and_is_refused():
     sess = _sess("yes", conf=None, lab_state="awaiting_confirmation")
     ws = _run(sess)
+    assert "transcript_refused" in _types(ws)
+    assert "transcript_final" not in _types(ws)
+
+
+def test_missing_confidence_still_lets_a_cancel_through():
+    # Refusing a cancel buys no safety (it can only make the system safer) and would strand
+    # the user: they could neither confirm nor cancel, while the reprompt tells them to do
+    # one or the other. Cancel is exempt from the floor at any confidence.
+    ws = _run(_sess("cancel", conf=None, lab_state="awaiting_confirmation"))
     tf = _last(ws, "transcript_final")
-    assert tf is not None and tf["text"] == "yes"
-    assert tf["confidence"] == {"prob_mean": None, "prob_min": None}
+    assert tf is not None and tf["text"] == "cancel"
     assert "transcript_refused" not in _types(ws)
 
 

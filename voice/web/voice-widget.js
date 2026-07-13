@@ -250,6 +250,10 @@ export class VoiceWidget {
   // These are getters, not fields, so `vw.confirmFloor = 0` THROWS rather than silently sticking
   // a lie onto the widget for a panel to read back.
   get confirmFloor() { return this._confirmFloor; }   // number, or null until the first lab_state
+  // The server's TTS defaults ({voice, temperature, cfg_scale, top_k, max_frames}), or null
+  // until the first tts_params message. A host should seed its voice picker from this rather
+  // than from the first option in the list, which is a different voice.
+  get ttsDefaults() { return this._ttsDefaults || null; }
   get armed() { return this._armed; }                 // boolean
 
   // Resolves when playback finishes. Also resolves (never rejects, never hangs) if the user
@@ -603,6 +607,11 @@ export class VoiceWidget {
         break;
 
       case "tts_params":
+        // Remember the server's DEFAULTS (voice, temperature, cfg, top_k). A host that
+        // wants to honour them, rather than impose its own, needs to know what they are:
+        // the picker's first option is not the default voice, and selecting it would
+        // silently change how the assistant sounds.
+        if (m.defaults) this._ttsDefaults = m.defaults;
         this.resolveReq("tts_params", { params: m.params, defaults: m.defaults });
         break;
 

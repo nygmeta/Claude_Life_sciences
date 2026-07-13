@@ -350,17 +350,24 @@
         <div class="vad-meter-labels"><span>0</span><span>speech probability</span><span>1</span></div>
       </div>
 
-      <label class="dfield">
+      <!-- Ranges, steps and defaults are the ORIGINAL voice UI's, field for field, so a
+           value that worked there means the same thing here. -->
+      <label class="dfield" title="Speech probability needed to trigger. Higher = needs clearer or louder speech (fewer false triggers in noise).">
         <span class="dlabel">Speech threshold <b id="vThreshVal">0.50</b><span class="ddefault" id="vThreshDef">def 0.50</span></span>
-        <input type="range" id="vThresh" min="0" max="1" step="0.01" value="0.5">
+        <input type="range" id="vThresh" min="0.1" max="0.9" step="0.05" value="0.5">
       </label>
-      <label class="dfield">
-        <span class="dlabel">End-of-turn silence <b id="vTurnVal">700</b> ms<span class="ddefault" id="vTurnDef">def 700</span></span>
-        <input type="range" id="vTurnMs" min="100" max="3000" step="50" value="700">
+      <label class="dfield" title="Extra silence after a segment before the whole turn is sent and the assistant replies.">
+        <span class="dlabel">Turn pause <b id="vTurnVal">900</b> ms<span class="ddefault" id="vTurnDef">def 900</span></span>
+        <input type="range" id="vTurnMs" min="300" max="3000" step="100" value="900">
       </label>
-      <label class="dfield">
-        <span class="dlabel">Min segment <b id="vSegVal">150</b> ms<span class="ddefault" id="vSegDef">def 150</span></span>
-        <input type="range" id="vSegMs" min="0" max="1000" step="10" value="150">
+      <!-- "Segment pause" in the original UI, where its control was INERT: the page passed
+           minSilenceFrames (plural) to OmniStreamVAD.create(), which reads minSilenceFrame
+           (singular), so the library's own 200 ms was always in force no matter what the box
+           said. The default here is therefore 200, the value that has actually been running,
+           not the 600 the old box displayed. Moving this slider now really does move it. -->
+      <label class="dfield" title="Silence that ends one speech segment (feeds ASR). The original UI's control for this never took effect; this one does.">
+        <span class="dlabel">Segment pause <b id="vSegVal">200</b> ms<span class="ddefault" id="vSegDef">def 200</span></span>
+        <input type="range" id="vSegMs" min="200" max="1500" step="50" value="200">
       </label>
 
       <label class="dfield">
@@ -405,18 +412,12 @@
         <span class="dlabel">Voice</span>
         <select id="vVoice" class="dselect"><option value="">Loading voices…</option></select>
       </label>
-      <label class="dfield">
-        <span class="dlabel">Temperature <b id="vTempVal">0.70</b></span>
-        <input type="range" id="vTemp" min="0" max="1.5" step="0.05" value="0.7">
-      </label>
-      <label class="dfield">
-        <span class="dlabel">CFG scale <b id="vCfgVal">1.50</b></span>
-        <input type="range" id="vCfg" min="0" max="4" step="0.1" value="1.5">
-      </label>
-      <label class="dfield">
-        <span class="dlabel">Top-k <b id="vTopkVal">50</b></span>
-        <input type="range" id="vTopk" min="1" max="100" step="1" value="50">
-      </label>
+      <!-- Generation params are PINNED (temperature 0.15, cfg 1.0, top-k 0), which is
+           what the server defaults to and what these voices were tuned against. They are
+           not exposed: gepard is autoregressive, so a higher temperature does not make it
+           more expressive, it makes it more likely to hallucinate a syllable or drift
+           mid-sentence, and a demo is the worst place to discover that. Voice is the one
+           choice worth making here. -->
       <div class="dfield" style="display:flex;gap:7px;align-items:center">
         <input type="text" id="vTestLine" class="dtext" style="flex:1" value="Protocol compiled, awaiting your confirmation.">
         <button class="btn play" id="vTestVoice">▶ Speak</button>
@@ -1016,8 +1017,7 @@ setScenario('elisa');
   };
 
   /* ---- 3. Text-to-speech ---- */
-  const vVoice = $('vVoice'), vTemp = $('vTemp'), vTempVal = $('vTempVal');
-  const vCfg = $('vCfg'), vCfgVal = $('vCfgVal'), vTopk = $('vTopk'), vTopkVal = $('vTopkVal');
+  const vVoice = $('vVoice');
   const savedTts = loadSettings().tts || {};
 
   // The voice list comes from the server, so it can only be fetched once the socket is
@@ -1026,36 +1026,48 @@ setScenario('elisa');
   function refreshVoices(){
     if (typeof vw.listVoices !== 'function'){
       vVoice.innerHTML = '<option value="">(voices unavailable)</option>';
-      return;
+      return Promise.resolve();
     }
-    vw.listVoices().then(voices => {
+    return vw.listVoices().then(voices => {
       vVoice.innerHTML = '';
       for (const name of (voices || [])){
         const o = document.createElement('option'); o.value = name; o.textContent = name;
         vVoice.appendChild(o);
       }
-      if (savedTts.voice) vVoice.value = savedTts.voice;
+      // Seed from the SERVER's default voice, not from whatever happens to be first in the
+      // list. The first option is "default", which is a different speaker to the one the
+      // stack is tuned to ship (en_oak): selecting it would quietly change how the
+      // assistant sounds, and applyTts would then push that change to the server.
+      const serverVoice = (vw.ttsDefaults && vw.ttsDefaults.voice) || null;
+      const want = savedTts.voice || serverVoice;
+      if (want && [...vVoice.options].some(o => o.value === want)) vVoice.value = want;
     }).catch(e => { console.warn('[voice-settings] listVoices failed:', e); vVoice.innerHTML = '<option value="">(voices unavailable)</option>'; });
   }
-  refreshVoices();
-  if (savedTts.temperature != null) vTemp.value = savedTts.temperature;
-  if (savedTts.cfg_scale != null) vCfg.value = savedTts.cfg_scale;
-  if (savedTts.top_k != null) vTopk.value = savedTts.top_k;
-  vTempVal.textContent = Number(vTemp.value).toFixed(2);
-  vCfgVal.textContent = Number(vCfg.value).toFixed(2);
-  vTopkVal.textContent = vTopk.value;
+  // NOTE: refreshVoices() is deliberately NOT called here. The voice list has to come from
+  // the server, and at drawer-build time there is no socket yet, so calling it now fails
+  // and leaves a rejected request behind that poisons the retry. It is called once, after
+  // connect(), at the bottom of this block.
+
+  // Generation params are PINNED, and sent EXPLICITLY rather than omitted. Omitting them
+  // would not give us these values: the orchestrator drops unset params so the TTS backend
+  // applies its OWN defaults, which are not these. Voice is the only choice the drawer
+  // offers.
+  //
+  // gepard is autoregressive, so a higher temperature does not buy expressiveness, it buys
+  // a chance of a hallucinated syllable or a drift mid-sentence, and a live demo is the
+  // worst possible place to find that out. 0.15 / 1.0 / 0 is what the voices were tuned
+  // against. (The sliders that used to live here defaulted to 0.7 / 1.5 / 50, so merely
+  // opening the drawer would have quietly made every reply less stable than intended.)
+  const TTS_PINNED = { temperature: 0.15, cfg_scale: 1.0, top_k: 0 };
 
   function applyTts(){
-    const params = { voice: vVoice.value, temperature: Number(vTemp.value), cfg_scale: Number(vCfg.value), top_k: Number(vTopk.value) };
+    const params = Object.assign({ voice: vVoice.value }, TTS_PINNED);
     if (typeof vw.setTtsParams === 'function'){
       try { vw.setTtsParams(params); } catch (e) { console.warn('[voice-settings] setTtsParams failed:', e); }
     }
-    saveSettings({ tts: params });
+    saveSettings({ tts: { voice: vVoice.value } });   // only the voice is user state
   }
   vVoice.onchange = applyTts;
-  vTemp.oninput = () => { vTempVal.textContent = Number(vTemp.value).toFixed(2); applyTts(); };
-  vCfg.oninput = () => { vCfgVal.textContent = Number(vCfg.value).toFixed(2); applyTts(); };
-  vTopk.oninput = () => { vTopkVal.textContent = vTopk.value; applyTts(); };
 
   $('vTestVoice').onclick = () => {
     const text = $('vTestLine').value.trim() || 'Protocol compiled, awaiting your confirmation.';
@@ -1083,8 +1095,15 @@ setScenario('elisa');
   // and the list of voices it offers. A panel that reads "n/a" until someone happens to
   // speak is a panel nobody trusts. connect() is idempotent and captures no audio: not a
   // single sample is recorded until the user presses Voice.
-  vw.connect().then(() => { refreshVoices(); refreshFloor(); })
-              .catch(() => {/* no voice service: the drawer degrades, the console still works */});
+  // ONE place where everything that needs the server is initialised, in one order, after
+  // the socket is open: the voice list, the gate's floor, and the pinned TTS params (so
+  // they are in force for the FIRST reply, not only once someone changes the voice).
+  // applyTts is chained AFTER the voices land, not fired alongside them: the voice picker
+  // is empty until the list arrives, so running it in parallel would send an empty voice.
+  vw.connect()
+    .then(() => { refreshFloor(); return refreshVoices(); })
+    .then(() => applyTts())
+    .catch(() => {/* no voice service: the drawer degrades, the console still works */});
 
   micBtn.onclick = async () => {
     if (S.mode !== 'live') setMode('live'); // voice only makes sense against the real backend

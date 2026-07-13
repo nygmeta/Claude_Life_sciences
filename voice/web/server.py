@@ -2870,7 +2870,14 @@ async def handle_set_lab_state(ws, sess: Session, msg):
     machine."""
     state = msg.get("state")
     sess.lab_state = state if isinstance(state, str) and state.strip() else None
-    await send(ws, type="lab_state", state=sess.lab_state)
+    # Echo the floor back with the state. The console's settings drawer DISPLAYS this
+    # (read-only) so an operator can see the number the safety gate is judging against,
+    # next to the confidence the ASR actually reported. Showing it is useful; letting
+    # the browser SET it would mean the page could quietly switch the gate off, so it
+    # travels one way only.
+    await send(ws, type="lab_state", state=sess.lab_state,
+               armed=lab_backend.armed(sess.lab_state),
+               confirm_floor=lab_backend.CONFIRM_FLOOR)
 
 
 async def _speak_producer(queue: "asyncio.Queue", text: str):
@@ -3328,6 +3335,15 @@ async def handler(ws):
     # initial handshake: seed the client's assistant TTS controls with the
     # session's current params (all unset on connect) and the server defaults.
     await send(ws, type="tts_params", **_tts_params_payload(sess))
+    # Speech mode only: seed the confirmation floor at connect, not just when a lab
+    # state first arrives. The console's settings drawer shows the floor next to the ASR
+    # confidence, and a panel that reads "n/a" until someone happens to speak is a panel
+    # that gets ignored. Gated on speech_mode so a default connection's message stream is
+    # untouched. The floor is sent, never received: see handle_set_lab_state.
+    if sess.speech_mode:
+        await send(ws, type="lab_state", state=sess.lab_state,
+                   armed=lab_backend.armed(sess.lab_state),
+                   confirm_floor=lab_backend.CONFIRM_FLOOR)
     # Segment capture: tell the client whether the debug capture mode is on, so it
     # knows whether to show the label controls. Always sent (on=false is the normal
     # case); it is additive, so a client that ignores it is unaffected.

@@ -142,11 +142,32 @@ mic → browser VAD → Fun-ASR-Nano (STT) → Claude → gepard-1.0 (TTS) → s
 ```
 
 One orchestrator process serves the page and a WebSocket; ASR and TTS run as GPU services
-alongside it. A lab is not a chat room, so beyond a basic voice loop it adds the things a
-noisy, hands-busy room needs: a **confidence gate** (a misheard command is refused, not
-guessed at), **addressed-speech detection** (the mic hears the whole room, not every
-utterance is meant for the assistant), **barge-in**, and a **spoken confirmation gate**
-before anything is allowed to act.
+alongside it. A lab is not a chat room: the mic hears the whole room, and a word can move a
+robot. So beyond a basic STT → LLM → TTS loop:
+
+- **Confidence, built not read.** The STT model exposes none, so we wrap its decoder and
+  capture a score for every token. Every segment carries its own confidence.
+- **Noise gate.** A segment below a calibrated floor never becomes a turn. The threshold came
+  from 29 hand-labelled clips (noise 0.04–0.37, speech 0.50–0.96), not from a guess.
+- **Confirmation floor.** When the Lab Agent is awaiting confirmation, its next affirmative
+  starts a machine, so an unclear "yes" is refused out loud rather than obeyed, and missing
+  confidence fails closed. A "cancel" always passes at any confidence: refusing one buys no
+  safety and strands the user.
+- **Intent verification.** A *confident* mishear ("I am six" for IL-6) is read back as "Did you
+  mean: IL-6?" before it can reach the planner. Confidence alone cannot catch this class.
+- **Transcript normalisation.** Spoken forms the planner cannot parse ("I L six", "per whale")
+  are rewritten at the seam. Every rule comes from a failure measured on the real stack.
+- **Barge-in and streaming TTS.** It listens while it speaks, so it can be cut off mid-sentence,
+  and the reply is synthesised sentence by sentence.
+- **Turn segmentation.** Several spoken fragments become one turn, instead of a reply to every
+  pause.
+- **Addressed-speech detection** (opt-in, `LA_ADDRESSED=1`). A bounded classifier decides
+  whether an utterance was aimed at the assistant or at a colleague.
+
+Scope: the above is what the integrated console runs, where the Lab Agent owns planning and
+confirmation. The standalone voice app (`voice/web/index.html`) additionally carries a
+severity × confidence command gate with digit read-back, intent-bound confirmation, proactive
+lab-event announcements, and a hands-busy protocol walkthrough. See `voice/doc/FEATURES.md`.
 
 ### Running it
 

@@ -148,6 +148,36 @@ guessed at), **addressed-speech detection** (the mic hears the whole room, not e
 utterance is meant for the assistant), **barge-in**, and a **spoken confirmation gate**
 before anything is allowed to act.
 
+### Running it
+
+The integrated console (`voice/web/console.html`) is this API's web console **plus** voice.
+One command brings it up:
+
+```bash
+bash voice/deploy/start-lab-console.sh --voice <voice-host>
+```
+
+It starts the Lab Agent on loopback, serves the console, and borrows ASR, TTS, the safety
+gates and the "did you mean X?" check from a remote speech service over `wss://`. It
+installs four pure-Python packages and **needs no GPU**, because the speech half does not
+have to live where the console lives:
+
+```
+?api=http://localhost:8000     the Lab Agent, which must sit next to the robot
+?voice=<voice-host>            the speech service, wherever the GPU is
+```
+
+That split is not a preference. A robot lives on a lab LAN and the GPUs cannot move there,
+so **audio crosses the network and the protocol does not**: the machine that talks to the
+robot is the one standing beside it. Step by step in
+[voice/doc/HOST_THE_CONSOLE.md](voice/doc/HOST_THE_CONSOLE.md).
+
+**This does not drive a robot yet.** The Opentrons adapter compiles and *simulates*; there
+is no `execute()`, and no code here opens a socket to a robot. Every safety gate in the
+system today therefore guards a subprocess. What real execution would require, and which
+guarantees must be proven to still hold when it lands, is in
+[voice/doc/HARDWARE_EXECUTION.md](voice/doc/HARDWARE_EXECUTION.md).
+
 Start at `voice/README.md`. The seam where the two halves meet is `voice/doc/INTEGRATION.md`.
 
 Voice subsystem by Junchen Lu (@RanaCM).

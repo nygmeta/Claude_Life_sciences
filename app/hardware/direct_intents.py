@@ -73,25 +73,15 @@ _CONNECT_RE = re.compile(
 )
 
 # "Rerun the transfer", "run the transfer again", "do it again", "run the protocol
-# again", plus plain "run the transfer" / "run the protocol". The last two are more
-# permissive on purpose because the speech pipeline often adds trailing 's' to
-# "rerun" and drops the "again". Fires only when there's a runnable protocol
-# already on the robot. This is a demo convenience, not a real re-execute:
-# HARDWARE_EXECUTION.md still governs the adapter-native path.
+# again". Deliberately strict: plain "run the protocol" is NOT a rerun (too easy
+# to fire from an ASR partial that repeats). Fires only when there's a runnable
+# protocol already on the robot. This is a demo convenience, not a real
+# re-execute: HARDWARE_EXECUTION.md still governs the adapter-native path.
 _RERUN_RE = re.compile(
     r"\bre[- ]?run(s|ning|ned)?\b|"
     r"\brun\b.*\b(again|once more)\b|"
     r"\bdo\b.*\b(again|once more)\b|"
-    r"\brepeat\b.*\b(transfer|protocol|run|it)\b|"
-    r"\brun\b.*\b(transfer|protocol)\b",
-    re.I,
-)
-
-# SOP keywords the planner owns. If any of these appear in the same utterance,
-# defer to the SOP path instead of firing the direct rerun: "run an ELISA
-# protocol" is a planning request, not a rerun of the last transfer.
-_SOP_KEYWORDS_RE = re.compile(
-    r"\b(elisa|dilution|serial|titration|wash|assay|sop)\b",
+    r"\brepeat\b.*\b(transfer|protocol|run|it)\b",
     re.I,
 )
 
@@ -195,10 +185,6 @@ def match(transcript: str) -> str | None:
     """Return the intent name for a direct-robot utterance, or None to fall through."""
     for pat, name in _MATCHERS:
         if pat.search(transcript):
-            # The rerun matcher is the only one broad enough to catch phrases the
-            # SOP planner should own ("run an ELISA protocol"). Defer in that case.
-            if name == "rerun" and _SOP_KEYWORDS_RE.search(transcript):
-                continue
             return name
     return None
 

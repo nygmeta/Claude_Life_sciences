@@ -21,7 +21,42 @@ Everything below happens on **the machine that sits on the robot's LAN**. Nothin
 - **Python 3.10 or newer.** On Debian or Ubuntu, `python3-venv` as well (`sudo apt install python3-venv`), because the stock Python there cannot create a virtualenv without it.
 - **An Anthropic API key.** The **planner runs on this machine**, so this machine needs its own key. The speech service holds a separate key for the verification turn; the two are not shared, and neither is ever committed.
 - **No GPU, no CUDA, no model download.** Speech is borrowed over a WebSocket.
-- **The speech host**, which the operator of the speech service will give you. It is a hostname, nothing more.
+- **A speech host.** This is just a hostname. If you do not have one, read the next section first, because you may not need one at all.
+
+## Where does `<voice-host>` come from?
+
+Nothing here is tied to any particular deployment. `<voice-host>` is a plain parameter with **no default**: the script refuses to start until you supply one, precisely so it cannot quietly point at somebody else's machine.
+
+There are three ways to have one, and the first is the one most people want.
+
+### You are one machine, and it has a GPU: you do not need a voice host
+
+**The split only exists because a robot and a GPU can be in different buildings.** If they are not, do not split anything. Run ASR and TTS on `127.0.0.1:8030` and `127.0.0.1:8040` (see "Deploy to a self-hosted GPU host" in [../README.md](../README.md)), then:
+
+```bash
+bash deploy/run-integration-local.sh
+```
+
+That starts the Lab Agent and the orchestrator together and serves the console at `http://127.0.0.1:8766`, with everything on one box and no `?voice=` parameter at all. The console defaults to its own origin for speech, which is exactly right in this case.
+
+### Your GPU is on another machine you control
+
+Same as above, but forward the two service ports to your workstation first:
+
+```bash
+bash deploy/dev-forward.sh --bg     # SSH forward: :8030 (ASR) and :8040 (TTS)
+bash deploy/run-integration-local.sh
+```
+
+The GPU host's coordinates live in the gitignored `credentials/host.env`, never in the repo. ASR and TTS bind to loopback on that host and are exposed to nothing else; the SSH forward is the only way in.
+
+### The console must sit on a robot's LAN, and the GPU cannot
+
+This is the only case that needs a `<voice-host>`, and it is the case this document is about. Someone has to run the speech service and expose it at a hostname the browser can reach over `wss://`.
+
+**To be that speech host yourself:** stand up ASR and TTS as above, run the orchestrator, and give it a public hostname (see [DEPLOY_PUBLIC.md](DEPLOY_PUBLIC.md), which routes a tunnel to it and puts access control in front). The orchestrator serves speech at `wss://<host>/?mode=speech` and **needs no Lab Agent of its own**: in speech mode it is a pure speech-in, speech-out service, so the box with the GPU never needs to know a robot exists.
+
+Then pass that hostname as `--voice`. Anyone can be the speech host, including you, on your own hardware, for free.
 
 ### 1. Get the code
 

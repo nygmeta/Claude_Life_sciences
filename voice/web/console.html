@@ -892,14 +892,14 @@ setScenario('elisa');
   const vw = new VoiceWidget({
     // The speech service does NOT have to live where this page lives.
     //
-    // The robot is on the scientist's LAN, so the Lab Agent has to run next to it, which
-    // means the console is served from HER machine. The GPU that does ASR and TTS is on the
-    // other side of the world. Those are different constraints and they pull in different
+    // The robot is on a lab LAN, so the Lab Agent has to run next to it, which means the
+    // console is served from that machine. The GPU that does ASR and TTS may be somewhere
+    // else entirely. Those are different constraints and they pull in different
     // directions, so the voice endpoint is a parameter, not an assumption:
     //
-    //   ?voice=lab-auto.syncspeech.app     -> wss://lab-auto.syncspeech.app/?mode=speech
-    //   ?voice=wss://host/path             -> used verbatim
-    //   (omitted)                          -> same origin as this page (the local case)
+    //   ?voice=speech.example.com      -> wss://speech.example.com/?mode=speech
+    //   ?voice=wss://host/path         -> used verbatim
+    //   (omitted)                      -> same origin as this page (the local case)
     //
     // Audio goes to the speech box; the protocol never does. The robot is only ever spoken
     // to by the machine standing next to it.

@@ -10,6 +10,45 @@ English-only (gepard synthesizes EN/ES-MX/PT-BR/NL, not Chinese).
 This directory is self-contained: every command below is run with `voice/` as the working
 directory.
 
+## Two pages. Pick the right one.
+
+There are **two** front ends here, and opening the wrong one is the single most common way
+to lose an hour, because it fails silently rather than loudly.
+
+| | `web/index.html` | `web/console.html` |
+|---|---|---|
+| what it is | the **standalone** voice assistant | the **Lab Agent console**, voice + the lab UI |
+| talks to | its own orchestrator, same origin | a Lab Agent API **and** a speech service, which may be on different machines |
+| use it for | testing the voice stack alone | **the lab demo, and anything near a robot** |
+| served by | `deploy/run-web-local.sh` (:8765) | `deploy/start-lab-console.sh` (:8090) |
+
+The rest of this README documents the **standalone** page. If you want the lab console,
+which is almost certainly what you want, go to
+**[doc/HOST_THE_CONSOLE.md](doc/HOST_THE_CONSOLE.md)** and run:
+
+```bash
+bash deploy/start-lab-console.sh --voice <voice-host>
+```
+
+That starts the Lab Agent locally and serves the console, borrowing ASR, TTS, the safety
+gates and the "did you mean X?" check from a remote speech service over `wss://`. **No
+GPU is needed on that machine.** It is the setup to use when the console must sit on a
+robot's LAN while the GPUs cannot.
+
+Two traps worth naming, because both look like broken buttons rather than a wrong page:
+
+- **Do not open a bare `http://localhost:8090`.** It used to serve `index.html`, which
+  hardcodes its WebSocket to its own origin, finds nothing there, and leaves the mic
+  greyed out forever with no error. `/` now redirects to the console, but open the URL the
+  script prints and you can't get this wrong.
+- **The mic only arms on the Live tab.** It is deliberately greyed on **Demo**, which
+  takes no input.
+
+**None of this drives a robot yet.** The adapter can compile and simulate an Opentrons
+protocol; there is no `execute()`. See
+**[doc/HARDWARE_EXECUTION.md](doc/HARDWARE_EXECUTION.md)** for what exists, what does not,
+and what real execution would require.
+
 ## Architecture (split: dev machine + self-hosted GPU host)
 
 ```
